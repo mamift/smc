@@ -1,0 +1,3880 @@
+<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">
+
+<html>
+
+<head>
+<title>SMC - Simple Managed Compiler Sample</title>
+</head>
+
+<body bgcolor="#FFFFFF" text="#000000" leftmargin="8">
+<font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2">
+
+<a name="top"></a>
+
+<h2><a name="DocTop"></a>
+ SMC - <u>S</u>imple <u>M</u>anaged <u>C</u>ompiler Sample</h2>
+
+<p>
+This document has the following main sections:
+<ul>
+  <li>
+  <a href="#Overview">Overview</a>
+  </li>
+  <li>
+  <a href="#BuildNotes">Build Notes</a>
+  </li>
+  <li>
+  <a href="#CodeTour">Code Tour</a>
+  </li>
+  <li>
+  <a href="#FileList">File List</a>
+  </li>
+  <li>
+  <a href="#Usage">Usage</a>
+  </li>
+  <li>
+  <a href="#Language">Language</a>
+  </li>
+</ul>
+
+<h3><a name="Overview"></a>
+Overview</h3>
+
+<p>
+This sample offers the full source for a substantial compiler that targets
+the .NET Common Language Runtime (CLR).&nbsp; The SMC compiler accepts a high-level language that
+is a subset of the C++ language.&nbsp; See the <a href="#Language"><b>Language</b></a>
+section later in this document for a brief characterization of the SMC
+language.<p>SMC can be used to compile itself into a .NET executable.&nbsp; An appropriate
+scheme of #ifdefs in the SMC source allows it to be compiled as either a
+traditional C++ Win32 application or as an IL-based .NET framework application.&nbsp; This ability
+means SMC can
+easily run on any platform where the CLR is supported.&nbsp; SMC
+is largely written within the constraints of CLR's Common Language
+Subset (CLS).
+
+<p>
+To cover the SMC compiler sample in this document, the internal
+architecture is divided into two major parts: a front end and a back end.&nbsp; The front end performs the traditional work of scanning tokens, parsing
+the input program constructs into parse trees according to the allowed
+syntax of the language, building an internal symbol table containing
+symbols and their associated types, and, based on the accumulated internal
+representation of the program, calling the back end to generate executable
+code.&nbsp; The SMC back end generates MSIL (Microsoft Intermediate Language)
+code and writes the executable image (including metadata) into the PE
+(Portable Executable) file format as either an EXE or a DLL.&nbsp; The back end
+has three major areas of functionality: metadata export, IL generation,
+and writing PE executable image output.
+
+<p>
+This sample is aimed at compiler developers.&nbsp; The primary purpose of the
+sample is not to exhaustively cover SMC's external functionality or
+language definition.&nbsp; Rather, to focus on the internal
+aspects of its architecture and implementation to illustrate the unique
+new ways that compilers are constructed to target the CLR.&nbsp; Aside from
+importing metadata, the front end is largely a backdrop to the
+study because most of what you need to know is in the back end.&nbsp; As a
+compiler developer delving into this sample, you should see familiar
+territory in the SMC front end.&nbsp; Thus, the bulk of this sample is dedicated
+to studying the SMC back end where the territory will be much less
+familiar.
+
+<p>
+This document shows how to build the SMC compiler, how to operate it, and
+how its internals are coded to support the unique needs of the CLR.&nbsp; Reference sections at the end of this document cover the SMC source files,
+the SMC command-line options, and the SMC language.
+
+<h3><a name="BuildNotes"></a>
+Build Notes</h3>
+
+<p>
+A pre-compiled executable for the SMC compiler is not provided in the SDK.&nbsp;
+To initially build SMC, you can compile it using Microsoft's Visual C++ in
+the Visual Studio IDE.&nbsp; After gaining an initial SMC.EXE, you can then use
+that SMC.EXE to build an SMCIL.EXE that can be further used to compile itself.
+
+<p>
+To summarize: the SMC source supports compilation in several different ways.
+
+<ul>
+  <li>
+  You can perform an unmanaged compile that yields a traditional native
+  Win32 executable, SMC.EXE.&nbsp; This compile uses the Visual Studio C++
+  compiler (either from the command line or within the IDE using the
+  provided SMC.DSW and SMC.DSP files)
+  </li>
+  <li>
+  You can perform a managed compile that yields a managed SMCIL.EXE that
+  contains IL and relies on the CLR for execution. This compile
+  uses the SMC.EXE produced above
+  </li>
+  <li>
+  You can perform a managed compile using SMCIL.EXE to compile itself
+  </li>
+</ul>
+
+<p>
+For more details on performing these builds see the following later
+sections:
+<ul>
+  <li>
+  <a href="#InitialBuild">Initial Build Using Visual C++</a>
+  </li>
+  <li>
+  <a href="#SelfBuild">Self Compilation of SMC</a>
+  </li>
+</ul>
+
+<p>
+Regardless of the kind of compilation you use, the bulk of the objects
+within the compiler are traditional unmanaged C++ objects.  During managed compiles, #include files have no special
+preprocessor status and are simply treated as more C++ source.&nbsp; But during
+unmanaged compiles, #include files are treated as traditional preprocessor
+files.
+
+<p>
+The SMC language does not support a full preprocessor.&nbsp; But the unmanaged
+compilation of SMC with VC++ <i> can</i> exploit the C++ preprocessor.&nbsp; So a
+MACROS.CPP file exploits preprocessor macros for use in tables to help
+efficiently keep the contents of the tables consistent.&nbsp; For example, one
+such macro is the <b>KEYWORD</b> macro (in MACROS.CPP).&nbsp; The
+<b>KEYWORD</b> macro is used extensively in the keywords table in
+KEYWORDS.H.&nbsp; During the unmanaged compile of SMC, these files are treated
+in the normal fashion as preprocessor files and the preprocessor is used
+to expand the macros into a generated MACROS.I file.&nbsp; Then MACROS.I can
+later be used as source input during the managed or self compilation of
+SMC.&nbsp; See the use of MACROS.I in the SMC.LST response file.
+
+<p>
+The SMC source uses a TYPEDEFS.H file to more efficiently support both
+managed and unmanaged compilation.&nbsp; Within SMC, references to classes are
+affected by the alternate compilation scenarios.&nbsp; TYPEDEFS.H uses two
+macros, MR and DEFMGMT, to insulate the rest of the code in SMC from
+having to distinguish the different ways of referencing classes.&nbsp; Here is
+a typedef macro example for the <b>compiler</b> class (in COMP.H).
+
+<p><table BORDER="0" WIDTH="80%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+<tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+<pre> <font FACE="COURIER" SIZE="2">
+<! ---Begin your cited code after this comment--- >
+    DEFMGMT
+    class compiler;
+    typedef compiler MR Compiler;
+<! ---End your cited code before this comment--- >
+</font></pre></td></tr>
+</table>
+
+<p>
+For unmanaged compilation, the DEFMGMT macro is defined as 'unmanaged' and
+the MR macro is defined as '*'.&nbsp; For managed compilation, the DEFMGMT is
+defined as 'managed' and the MR macro is defined as nothing.&nbsp; Thus, in
+either case, the rest of the SMC code can use <b>Compiler</b> (note the
+initial capitalization) for what would otherwise be references to the
+<b>compiler</b> class.&nbsp; This avoids an excessive use of <b>#ifdef</b>s
+throughout the SMC source.&nbsp; One significant exception to this is when SMC
+performs a <b>new</b> on the class.&nbsp; In most of these cases,
+<b>#ifdef</b>s must be used to deal with the variations required by
+managed and unmanaged compilation.
+
+<p>
+The CLR metadata APIs that are used in SMC
+are virtual functions on an unmanaged &quot;classic&quot; COM interface
+(i.e., calls are done via a COM VTable).&nbsp; To call these APIs from the
+managed code within SMC (i.e., when SMC itself is compiled as a managed
+application), an unmanaged CORWRAP.DLL with non-virtual functions offers a
+layer for mapping a set of non-virtual functions into the virtual
+functions of the metadata APIs.&nbsp; Thus, CORWRAP makes the calls to unmanaged
+code appear like direct calls from within managed code.&nbsp; 
+
+<p>
+If you don't have a recent version of MSCORLIB.DLL in your system
+directory, you'll need to tell SMC where to find a copy during compiles of
+.SMC programs.&nbsp; For example:
+
+<pre> <b><font FACE="COURIER" SIZE="2">
+    smc -sD:\</font></font><font face="COURIER" size="2">winnt\Microsoft.NET\Framework\v1.1.xxxx\mscorlib.dll ...etc...
+</font></b><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2"> </pre>
+
+<h4><a name="InitialBuild"></a>
+Initial Build Using Visual C++</h4>
+
+<p>
+A set of Visual Studio workspace and project files is provided in the
+source SMC directory.&nbsp; To build an initial SMC.EXE you can use
+these files from within Visual Studio by double-clicking the SMC.DSW
+file within the Microsoft Windows Explorer.&nbsp; After the SMC project is
+loaded into Visual Studio, you'll probably need to set the following SDK
+paths:
+<ul>
+  <li>
+  <b>Include path.</b> Choose <b>Settings</b> on the <b>Project</b> menu.
+  In the <b>C/C++</b> tab select the <b>Preprocessor</b> item in the
+  <b>Category</b> drop-down list.  In the <b>Additional include
+  directories</b> field, enter the appropriate path to the .NET Framework SDK
+  include directory (e.g., C:\Program 
+  Files\Microsoft.NET\FrameworkSDK\v1.1\Include)
+  </li>
+  <li>
+  <b>Library path.&nbsp;</b> While in the Project Settings dialog click the
+  <b>Link</b> tab.  Select the <b>Input</b> item in the <b>Category</b>
+  drop-down list.  In the <b>Additional library path</b> field, enter the
+  appropriate path to the .NET Framework SDK library directory (e.g., C:\Program 
+  Files\Microsoft.NET\SDK\v1.1\Lib)
+  </li>
+</ul>
+
+<p>
+At this point choose <b>Rebuild All</b> in the <b>Build</b> menu to build
+SMC.EXE.
+
+<h4><a name="SelfBuild"></a>
+Self Compilation of SMC</h4>
+<p>
+The following command uses SMC.EXE to produce a managed IL version of
+the SMC compiler:
+<pre> <font FACE="COURIER" SIZE="2"><b>
+    smc -OSMCIL.exe @smc.lst
+</b></font> </pre>
+
+<p>
+The -O option sets the output file name.  The rest of the necessary
+options are within the SMC.LST response file. After building SMCIL.EXE
+you can then use it to compile itself directly:
+<pre> <font FACE="COURIER" SIZE="2"><b>
+    smcil -OSMCIL2.exe @smc.lst
+</b></font> </pre>
+
+<p>
+The self-compiled executable images that are generated should only differ
+in size by 4 to 8 bytes due to the time/date stamps within the PE file.
+
+<h3><a name="CodeTour"></a>
+Code Tour</h3>
+
+<p>
+This section covers the internal architecture and operation of SMC.&nbsp; A
+general conceptual tour of the architecture is presented followed by a set
+of detailed walkthroughs of the internal functionality using a test input
+program.&nbsp; The emphasis in the walkthroughs will be on SMC's back end
+functionality as it supports the unique needs of a CLR
+&quot;managed&quot; compiler.&nbsp; SMC's metadata import functionality is
+toured in a separate subsection as front end functionality of a CLR &quot;managed&quot; compiler.&nbsp;
+This code tour has later subsections that
+cover expanded details on back-end functionality including metadata
+export, IL generation, and PE writing.
+
+<p>
+Here are the major topics covered in this code tour:
+<ul>
+  <li><a href="#SMCArch">SMC Architecture</a>
+  </li>
+  <li><a href="#FrontEnd">General Tour of Front End</a>
+  </li>
+  <li><a href="#BackEnd">General Tour of Back End</a>
+  </li>
+  <li><a href="#FunWalk">Functional Walkthrough</a>
+  </li>
+  <li><a href="#MDImport">Metadata Import</a>
+  </li>
+  <li><a href="#MDExport">Metadata Export</a>
+  </li>
+  <li><a href="#ILGen">IL Generation</a>
+  </li>
+  <li><a href="#PEWrite">PE Writing</a>
+  </li>
+</ul>
+
+<h4><a name="SMCArch"></a>
+SMC Architecture</h4>
+<p>
+The major architectural parts of SMC and their essential relationships are
+shown in the following diagram.
+<p>
+<img src="smc.gif" BORDER="0" ALT="SMC Architecture" WIDTH="600" HEIGHT="275">
+
+<p>
+For explanatory purposes, these are general conceptual breakdowns of inner
+functionality that should not to be taken as definitive.&nbsp; The source code
+is the final determination of the functionality.&nbsp; As we tour the
+functionality, we will cite the relevant source code.
+
+<p>
+The compiler front end consists of the scanner, the parser, a dynamic
+hierarchy of parse trees, the global hash table, the symbol table,
+metadata importing, and binding.&nbsp; In the front end, the compiler scans the
+input source and produces an internal representation of the input program.&nbsp;
+Binding is the central activity of the front end.&nbsp; Binding works with the
+symbol tables and parse trees and resolves their contents to fully
+attributed types, variables, and methods.
+
+<p>
+The scanner records tokens for the input syntactic constructs that are
+scanned.&nbsp; These sequences of tokens are recorded separately from the symbol
+table.&nbsp; The scanner is later called on to replay these token lists.&nbsp; In the
+symbol table, a compile state is used to indicate how far along a symbol
+is in the progress of the compilation (for example, <b>CS_NONE, CS_KNOWN,
+CS_PARSED, CS_DECLARED, CS_CNSEVALD, CS_COMPILED</b>).
+
+<p>
+The compiler back end uses the front end's internal representation of the
+input program (e.g., hash table, symbol table, and bound parse trees) to
+generate the output executable.&nbsp; Metadata is exported, IL is generated, and
+the output executable file is written in the PE (Portable Executable)
+format.&nbsp; During most of the operation of the compiler, output is
+accumulated in data structures within an output buffer.&nbsp; The output
+executable file is actually written at the very end when this buffer is
+flushed.&nbsp; Output is staged in memory because the PE format consists of
+consecutive &quot;sections&quot; and there is a need to know the size of
+the sections in advance of the final PE writing.
+
+<p>
+In a sense SMC is a &quot;multi-pass&quot; compiler.&nbsp; However, only one
+pass over the source is required.&nbsp; Subsequent passes use the internal
+program representation that was generated during the first pass over the
+source.&nbsp; Here is a summary of the passes.
+
+<ol>
+  <li>
+  The complete source of the input program is scanned and parsed into an
+  internal representation.&nbsp; The source file(s) are no longer needed after
+  the first pass.&nbsp; During this pass, initial entries in the hash and symbol
+  tables are created and the source location of namespace, class, and
+  method symbols is recorded.&nbsp; Metadata import of the top-level namespaces,
+  names, and classes is also done during this pass.&nbsp; At the end of the
+  first pass, all the namespaces, names, classes, and class members have
+  entries in the symbol table.
+  </li>
+  <li>Identify constants and enums.
+  </li>
+  <li>
+  Declare classes and process member list.&nbsp; Check for overloaded operators,
+  nested classes, overridden members, etc.&nbsp; This pass promotes symbols from
+  the <b>CS_KNOWN</b> to the <b>CS_DECLARED</b> state.
+  </li>
+  <li>
+  Take front-end-generated raw parse trees and bind the parse trees and
+  symbols to values.&nbsp; Fold expressions and resolve overloading.&nbsp; Generate
+  Metadata.
+  </li>
+  <li>
+  Generate IL code and write it into output PE file.
+  </li>
+</ol>
+
+<p>
+This is a rough summary.&nbsp; See the walkthrough later in this tour for more
+precise details on the internal behavior characterized above as
+&quot;passes&quot;.
+
+<h4><a name="FrontEnd"></a>
+General Tour of Front End</h4>
+<p>
+Here is a diagram of the SMC front end showing a general correlation with
+the main source files that implement the parts.
+<p>
+<img src="smcfe.gif" BORDER="0" ALT="SMC Front End" WIDTH="600" HEIGHT="277">
+
+<p>
+The compiler front end is implemented using the following principal
+objects.
+
+<p>
+<table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="95%">
+<tr>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Object</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Files</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Purpose</b>
+   </font></th>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>scanner</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+scan.cpp, scan.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Scans source text and produces symbol tokens</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>parser</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+parser.cpp, parser.h, tree.cpp, toplist.h, treenode.h, treeops.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Uses scanner and identifies program constructs.&nbsp;</font></font><font face="Arial" size="2">
+   </font><font FACE="Arial" SIZE="2"><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2">Makes entries in
+Hash and Symbol tables.&nbsp;</font> </font><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2"><font FACE="Arial" SIZE="2">Creates parse trees and makes nodes in
+   them</font></font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>hashTab</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+hash.cpp, hash.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Global hash table.&nbsp;</font><font face="Arial" size="2"> </font><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2"><font FACE="Arial" SIZE="2">In conjunction with the symbol table facilitates
+rapid symbol lookup</font></font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>symTab</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+type.cpp, symbol.cpp, comp.h, type.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Global symbol table with types</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>SymDefRec</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+symbol.cpp, symbol.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Symbol table's symbol definition record</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>TypDefRec</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+type.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Symbol table's type definition record</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>metadataImp</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+corimp.cpp
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Import metadata from managed code in DLLs</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>compiler</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+comp.cpp, comp.h, bind.cpp, gencode.cpp, corexp.cpp
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The main compiler object.</font><font face="Arial" size="2">&nbsp;</font><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2"><font FACE="Arial" SIZE="2">
+   Consolidates the central functionality
+of the compiler</font></font></td>
+</tr>
+
+</table>
+
+<p>
+The &quot;raw&quot; parse trees out of the parser do not have type info.&nbsp; They do have a representation of the input program's syntactical
+structure.&nbsp; The parse trees are created on a function body basis.&nbsp; A body is
+translated into a linked list of parse trees that represent all the
+statements in the body.
+
+<p>
+The binder processes the parse trees one by one driving the generation of
+code as it goes.&nbsp; The binder drives IL generation using bound parse trees.&nbsp;
+During this process, the binder does overall semantic analysis on the
+parse trees, name resolutions, operand verification for each operator, the
+inserting of appropriate casts, and overloaded operator checking.&nbsp; It takes
+the raw parse trees and produces fully attributed trees out of them,
+assigning type info and appropriate attributes to the tree nodes.
+
+<p>
+After the binder finishes and yields a bound parse tree, the code in
+GENCODE.CPP uses the bound tree to generate code.&nbsp; Take the following input
+source fragment as an example.
+
+<p><table BORDER="0" WIDTH="80%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+<tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+<pre> <font FACE="COURIER" SIZE="2">
+<! ---Begin your cited code after this comment--- >
+    if (condition)
+      statement1
+    else
+      statement2
+<! ---End your cited code before this comment--- >
+</font></pre></td></tr>
+</table>
+
+<p>
+For this source the bound parse tree would look like this:
+<p>
+<img src="smcpt.gif" BORDER="0" ALT="SMC BoundParseTree" WIDTH="240" HEIGHT="166">
+<p>
+The code in GENCODE.CPP recursively walks this tree (depth first) to
+generate code as it goes.
+
+<p>
+The global hash table maps symbols to info on the symbols.&nbsp; All names are
+involved (e.g., labels, keywords, class names, function names, etc.).&nbsp; It
+is used for fast lookup because it does have scope information in it.&nbsp; A
+lookup consists of hashing a symbol name string to obtain the identifier
+for the symbol.&nbsp; Note that the hash table actually consists of two separate
+tables: one for language keywords and one for program symbols.
+
+<p>
+The symbol table is a tree that is constructed out of linked lists.&nbsp; Take
+the following input source fragment as an example.
+
+<p><table BORDER="0" WIDTH="80%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+<tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+<pre> <font FACE="COURIER" SIZE="2">
+<! ---Begin your cited code after this comment--- >
+    namespace NS
+    {
+      class foo
+      {
+        void f() { ... }
+        void g() { ... }
+      }
+
+      class bar
+      {
+        void h() { ... }
+        void i() { ... }
+      }
+    }
+<! ---End your cited code before this comment--- >
+</font></pre></td></tr>
+</table>
+
+<p>
+For this source the first pass would create a symbol table structure like
+this:
+<p>
+<img src="smcst.gif" BORDER="0" ALT="SMC SymTree" WIDTH="360" HEIGHT="238">
+
+<p>
+Within SMC the root of the symbol table tree is the &lt;global&gt;
+(<b>cmpGobalNS</b>) namespace.&nbsp; If the .NET Framework base classes are
+imported then the entire left branch of the tree above represents the
+<b>System</b> namespace contents.&nbsp; The right branch illustrates the symbols
+for the program fragment.&nbsp; The function name symbols are in linked lists
+attached to their respective parent classes.
+
+<p>
+If SMC is evolved to support incremental compilation then multiple hash
+and symbol tables would be needed.&nbsp; You may see code in SMC that
+anticipates this.
+
+<h4><a name="BackEnd"></a>
+General Tour of Back End</h4>
+<p>
+Here is a diagram of the SMC back end showing a general correlation with the
+main source files that implement the parts.
+<p>
+<img src="smcbe.gif" BORDER="0" ALT="SMC Front End" WIDTH="360" HEIGHT="287">
+
+<p>
+The compiler back end is implemented using the following principal
+objects.
+
+<p>
+<table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="95%">
+<tr>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Object</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Files</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Purpose</b>
+   </font></th>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>compiler</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+corexp.cpp, gencode.cpp
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Metadata export and general code generation</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>symTab</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+type.cpp, symbol.cpp, comp.h, type.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Global symbol table with types</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>genIL</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+genil.cpp, genil.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+IL (Intermediate Language) code generation</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>WPEHashTab</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+pewrite.cpp, pewrite.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Name hash table for import names that are written to output file</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>writePE</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+pewrite.cpp, pewrite.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Writing of PE (Portable Executable) output</font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+<b>outFile</b>
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+outfile.cpp, outfile.h
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Output buffer and file output</font></td>
+</tr>
+
+</table>
+
+<h4><a name="FunWalk"></a>
+Functional Walkthrough</h4>
+<p>
+Now that we have a general familiarity with SMC internals, a simple
+example program will be used to walk through the internal actions of the
+compiler as it processes the program and generates code for it.&nbsp; The
+example program is an SMC Managed C++ rendition of the time-honored &quot;hello
+world&quot; program.&nbsp; Here it is:
+
+<p><table BORDER="0" WIDTH="80%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+<tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+<pre> <font FACE="COURIER" SIZE="2">
+<! ---Begin your cited code after this comment--- >
+  int main(String managed [] args)
+  {
+      Console.WriteLine(&quot;hello world&quot;);
+      return  0;
+  }
+<! ---End your cited code before this comment--- >
+</font></pre></td></tr>
+</table>
+
+<p>
+Notice here that SMC offers some convenient defaults.&nbsp; The <b>main</b>
+function has a name that is specially recognized by Managed C++ programs
+as the main entry point of the program.&nbsp; SMC also imports the CLR
+base classes (in MSCORLIB.DLL).&nbsp; This includes much of the <b>System</b> namespace.&nbsp;
+In effect, the compiler injects a &quot;using System.*;&quot;.&nbsp; By doing
+so, the above shorter Console.WriteLine() call can be resolved without the
+necessity of using the fully qualified call, System.Console.WriteLine().
+
+<p>
+To compile the HELLO.SMC program, SMC is invoked as follows:
+
+<pre> <font FACE="COURIER" SIZE="2"><b>
+    smc -v2 -g hello.smc
+</b></font> </pre>
+
+<p>
+Although the -v2 -g options are used above, no options are actually needed
+for this simple compilation.&nbsp; We will use the -v2 option (for 'verbose')
+because it is very useful for logging important aspects of SMC's internal
+behavior.&nbsp; Likewise, we will use the -g option because it shows the IL
+code generated.&nbsp; Here is the log of console output that you get when you
+compile HELLO.SMC with these options.
+
+<p><table BORDER="0" WIDTH="80%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+<tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+<pre> <font FACE="COURIER" SIZE="2">
+<! ---Begin your cited code after this comment--- >
+    Microsoft (R) Visual SMC Compiler Version 0.90.0705
+    Copyright (C) 1999-2002 Microsoft Corp. All rights reserved.
+
+    Defining  file-scope symbol: 'main'
+    Declaring 'System'
+    Declaring 'System.Collections'
+    Declaring 'System.Security'
+    Declaring 'System.Security.Util'
+    Declaring 'System.Security.PublicKey'
+    Declaring 'System.Security.Policy'
+    Declaring 'System.Security.Registry'
+    Declaring 'System.Security.Permissions'
+    Declaring 'System.Security.ClientStorage'
+    Declaring 'System.Security.CodeIdentity'
+    Declaring 'System.Reflection'
+    Declaring 'System.Serialization'
+    Declaring 'System.Debug'
+    Declaring 'System.NLS'
+    Declaring 'System.Resources'
+    Declaring 'System.IO'
+    Declaring 'System.Interop'
+    Declaring 'System.Remoting'
+    Declaring 'System.Hosting'
+    Declaring 'Microsoft'
+    Declaring 'Microsoft.Runtime'
+    Declaring 'Microsoft.Win32'
+    Declaring 'Temp'
+    Declaring 'Temp.Test'
+    Declaring 'HELLO.SMC'
+    Compiling 'System'
+    Compiling 'System.Collections'
+    Compiling 'System.Security'
+    Compiling 'System.Security.Util'
+    Compiling 'System.Security.PublicKey'
+    Compiling 'System.Security.Policy'
+    Compiling 'System.Security.Registry'
+    Compiling 'System.Security.Permissions'
+    Compiling 'System.Security.ClientStorage'
+    Compiling 'System.Security.CodeIdentity'
+    Compiling 'System.Reflection'
+    Compiling 'System.Serialization'
+    Compiling 'System.Debug'
+    Compiling 'System.NLS'
+    Compiling 'System.Resources'
+    Compiling 'System.IO'
+    Compiling 'System.Interop'
+    Compiling 'System.Remoting'
+    Compiling 'System.Hosting'
+    Compiling 'Microsoft'
+    Compiling 'Microsoft.Runtime'
+    Compiling 'Microsoft.Win32'
+    Compiling 'Temp'
+    Compiling 'Temp.Test'
+    Compiling 'HELLO.SMC'
+    Compiling 'int main(String [] args)'
+    Compiling 'int main(String [] args)'
+        Defined at [def@C40000] HELLO.SMC(1)
+
+    Generating IL for 'int main(String [] args)'
+    ======================================================
+    [offs:sl]
+    ======================================================
+    Compile statement [2]:
+     [01F5003C] (type=String [])    var-decl  next=[00000000] 'args'
+    Compile statement [3]:
+        [01F50114]       <list>
+           [01F500DC]    str const  'hello, world'
+     [01F5013C]           ()
+        [01F500B4]     qualname  sym='System.Console.WriteLine'
+    [0000: 0]  ldstr         tok[70000001]
+    [0005: 1]  call          tok[A000001]
+    Compile statement [4]:
+     [01F501B4]       return
+        [01F5018C]    int const  0
+    [000A: 0]  ldc.i4.0
+    [000B: 1]  ret
+    DOS  header is at 0x0000 (size=0x40)
+    COFF header is at 0x00B8 (size=0x18)
+    Opt. header is at 0x00D0 (size=0xE0)
+    Section tab is at 0x01B0 (size=0x50)
+    Section[0]  is at 0x0200
+      Section hdr #0 at 0x0200 = 00001000 (size=0x001D)
+      Section hdr #1 at 0x0400 = 00002000 (size=0x01EE)
+
+    IAT starts at 0400           for 'MSCOREE.DLL'
+        entry --&gt; 2038           for 'MSCOREE.DLL._CorExeMain'
+
+    IDT entry --&gt; 2000/2030/2046 for 'MSCOREE.DLL'
+
+    ILT starts at 0430           for 'MSCOREE.DLL'
+        entry --&gt; 2038           for 'MSCOREE.DLL._CorExeMain'
+
+    HNT starts at 0438           for 'MSCOREE.DLL'
+        entry  at 0438               'MSCOREE.DLL._CorExeMain'
+
+    DLL entry  at 0446               'MSCOREE.DLL'
+
+    1536 bytes written to 'HELLO.exe'
+
+    A total of      1 function/method decl's processed
+    A total of      1 function/method bodies  compiled
+    A total of      5 lines of source text   processed
+<! ---End your cited code before this comment--- >
+</font></pre></td></tr>
+</table>
+
+<p>
+We see a portion of this output that logs the import of the system
+metadata (from MSCORLIB.DLL).&nbsp; Note that only the top-level namespaces and
+classes from MSCORLIB.DLL are initially imported.&nbsp; Deeper level imports are
+done later on demand as the source for HELLO.SMC is processed.&nbsp; There is a
+portion of the output that logs the generation of IL code.&nbsp; Finally, there
+is a portion that logs the metadata export activity showing starting
+offsets and sizes for the various sections of metadata that go into the
+output HELLO.EXE file.&nbsp; The term 'declare' above means that only the name
+of the symbol is known.&nbsp; The term 'define' means that the corresponding
+content for the symbol is known.&nbsp; The term 'compiling' means the binder is
+binding appropriate values to the symbol and generating code for it.
+
+<p>
+The walkthrough of this compilation begins at the main entry point of SMC.&nbsp;
+Here is the <b>main</b> function in SMC.CPP:
+
+<p><table BORDER="0" WIDTH="80%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+<tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+<pre> <font FACE="COURIER" SIZE="2">
+<! ---Begin your cited code after this comment--- >
+  /***********************************************************************
+   *
+   *  Main platform-specific entry point of compiler.
+   */
+
+  #ifdef  __SMC__
+
+  int main(String managed [] args)
+  {
+      return  compileAll(args.GetLength(), args, false);
+  }
+
+  #else
+
+  int _cdecl main(int argc, stringArr_t argv)
+  {
+      return  compileAll(argc - 1, argv + 1, oldcmd);
+  }
+
+  #endif
+<! ---End your cited code before this comment--- >
+</font></pre></td></tr>
+</table>
+
+<p>
+Conditional compilation is controlled in the above by the __SMC__
+preprocessor symbol.&nbsp; This symbol is defined when SMC is being compiled as
+&quot;managed&quot; code.&nbsp; When __SMC__ is not defined, SMC is being
+compiled as a traditional (i.e., &quot;unmanaged&quot;) C++ program.&nbsp; The
+source code for SMC thus offers an example of a program that serves
+several different compilation scenarios.&nbsp; It supports traditional
+unmanaged C++ compilation, Managed C++ compilation using the Managed C++
+compiler in the .NET Framework SDK tools, and Managed C++ compilation using
+SMC to compile itself.
+
+<p>
+As you know if you've ever rigged your programs with debugger trace
+statements, the inner execution of a program can produce an immense amount
+of trace log information.&nbsp; This can lead to an overwhelming wealth of data
+where it is difficult to &quot;see the wood for the trees&quot;.&nbsp; So, for
+this walkthrough we will try to describe the major signposts along the way
+during the compilation of HELLO.SMC without getting too buried in an
+exhaustive analysis of inner behavior.
+
+<p>
+To help map the nested call hierarchy of SMC, we will use outlines of the
+major function calls as they are made.&nbsp; The outlines are by no means
+exhaustive.&nbsp; They condense the chronology of the calls as SMC compiles the
+HELLO.SMC test program.&nbsp; The outlines serve to characterize not only the
+internal behavior of a CLR compiler but also the procedures you need
+to code in such a compiler.&nbsp; The main walkthrough in this section maps the
+compiler behavior at a fairly general level.&nbsp; It will thus be somewhat
+invariant relative to the HELLO.SMC input program.&nbsp; The deeper we go in the
+later functional outlines, the more they will reflect and note the
+processing unique to HELLO.SMC.
+
+<p>
+In the outlines we will use fully qualified method names and reference the
+names of the source files that implement the methods.&nbsp; Important symbols in
+this text narrative are shown <b>bold</b> for emphasis.&nbsp; These are symbols
+you can search for in the SMC source files.&nbsp; The level of indentation in
+the outline corresponds to the scope of a major function call.&nbsp; To aid in
+highlighting the start of a call level, title lines with asterisks are
+used.&nbsp; Despite the simplicity of the input HELLO.SMC program, the
+functional outline can get confusingly deep.&nbsp; So the main outline has some
+entries that refer to later sections of this document where the
+functionality is expanded more deeply in separate outlines (Metadata
+Import, Metadata Export, IL Generation, and PE Writing).
+
+<p>
+The <b>main</b> function calls the <b>compileAll</b> function which does
+what its name implies.&nbsp; Here is the main functional outline starting within
+the <b>compileAll</b> function.
+
+<ul>
+  <li>
+  **** <b>compileAll</b> (in SMC.CPP) ****
+  </li>
+  <li>
+  <b>compileAll</b> starts by performing a loop to process the options
+  that were specified on the SMC command line.&nbsp; In this case, the command
+  line has the -v2 -g options. When there are options, the
+  <b>processOption</b> function (also in SMC.CPP) is called for each
+  command line option.&nbsp; The options are obtained in the traditional way
+  from an <b>argv</b> string array passed into <b>main</b>.&nbsp; The handling
+  of the options assigns appropriate values into a <b>compConfig</b>
+  structure declared in CONFIG.H and defined as the <b>config</b> stack
+  variable within <b>compileAll</b>.
+  </li>
+  <li>
+  Call <b>processFileList</b> (in SMC.CPP) to process the files specified
+  on the command line.&nbsp; These filenames are available in the traditional
+  <b>argv</b> array passed to <b>main</b>.&nbsp; <b>processFileList</b> also
+  processes '@' response files.&nbsp; It takes the specified filenames and forms
+  them into full path filenames.
+  <ul>
+    <li>
+    **** <b>processFileList</b> (in SMC.CPP) ****
+    </li>
+    <li>
+    Call <b>compiler::cmpInit</b> (in COMP.CPP) to initialize the compiler
+    if it is not already initialized.
+    <ul>
+      <li>
+      **** <b>compiler::cmpInit</b> (in COMP.CPP) ****
+      </li>
+      <li>
+      Call <b>scanner::scanInit</b> (in SCAN.CPP) to create and initialize
+      the scanner.
+      </li>
+      <li>
+      Create and initialize the Hash, Symbol, and Type tables.
+      </li>
+      <li>
+      Call <b>parser::parseInit</b> (in PARSER.CPP) to create and
+      initialize the parser.
+      </li>
+      <li>
+      Call <b>compiler::cmpInitMDimp</b> (in CORIMP.CPP) to import the
+      Metadata of MSCORLIB.DLL.&nbsp; This makes the rich context of the .NET
+      Framework Class Libraries available.  For expanded details see the
+      <a href="#MDImport">Metadata Import</a> section later in this document.
+      </li>
+      <li>
+      Call <b>parser::parseUsingInit</b> (in PARSER.CPP) to set up the
+      compiler as though a &quot;using System.*;&quot; statement had been
+      processed.
+      </li>
+    </ul>
+    </li>
+    <li>
+    Call <b>compiler::cmpPrepSrc</b> (in COMP.CPP) to process each source
+    file.&nbsp; This call is made through the <b>processOneFileFN</b> function
+    pointer that is passed into <b>processFileList</b> as a parameter.
+    <ul>
+      <li>
+      **** <b>compiler::cmpPrepSrc</b> (in COMP.CPP) ****
+      </li>
+      <li>
+      Call <b>parser::parsePrepSrc</b> (in PARSER.CPP) which parses all
+      top level declarations in the source text and essentially treats the source file as one long string, translating it into a initial
+      entries in the symbol and hash tables.
+      <ul>
+        <li>
+        **** <b>parser::parsePrepSrc</b> (in PARSER.CPP) ****
+        </li>
+        <li>
+        Call <b>scanner::scanStart</b> (in SCAN.CPP) to start the scanner.
+          <ul>
+            <li>
+            **** <b>scanner::scanStart</b> (in SCAN.CPP) ****
+            </li>
+            <li>
+            Call <b>infile::inputStreamInit</b> to open the source file.&nbsp; If the file is larger than an OS memory page then a file
+            mapping is created and used; otherwise, a traditional file
+            open is used and for speed the entire file contents is read
+            into an allocated memory buffer of sufficient size.&nbsp; The input
+            source line counter is also initialized.
+            </li>
+          </ul>
+        </li>
+        <li>
+        Call <b>scanner::scan</b> (in SCAN.CPP) to deliver a stream of
+        tokens by scanning the source file.&nbsp; Add appropriate entries into
+        the symbol and hash tables.
+        </li>
+        <li>
+        Call <b>scanner::scanClose</b> (in SCAN.CPP) to free up scanner
+        resources and close the input source file.
+        </li>
+      </ul>
+      </li>
+    </ul>
+    </li>
+    <li>
+    If wild card file names were specified on the command line (or in
+    response files), <b>processFileList</b> is called recursively from
+    within itself to process those source files and/or, as directed by the
+    -R option, to descend into subdirectories and process source files
+    there.&nbsp; After all source files are processed, the first pass (i.e.,
+    over the source file) is complete; subsequent &quot;passes&quot; use
+    the internal representation of the program that was obtained during
+    the first pass.
+    </li>
+  </ul>
+  </li>
+  <li>
+  Given the internal symbol information recorded in the first pass over the
+  source, call <b>compiler::cmpStart</b> (in COMP.CPP) to start the internal
+  &quot;passes&quot; of the compilation.
+  <ul>
+    <li>
+    **** <b>compiler::cmpStart</b> (in COMP.CPP) ****
+    </li>
+    <li>
+    The name of the first source file encountered is used as the name of
+    default output file.&nbsp; Other preparations are made for output.
+    </li>
+    <li>
+    Call <b>compiler::cmpDeclConsts</b> (in COMP.CPP) to visit all
+    namespaces seen so far looking for enums and constants to pre-declare.&nbsp;
+    This means entering the names into the symbol table.&nbsp; In a later pass
+    (below) the associated enum and constant values are evaluated and
+    recorded in the symbol table.&nbsp; <b>cmpDeclConsts</b> is called
+    recursively from within itself to process all child namespaces.
+    </li>
+    <li>
+    Call <b>compiler::cmpPrepOutput</b> (in COMP.CPP) to create and
+    initialize the <b>writePE</b> (see PEWRITE.H) and the <b>GenILref</b>
+    (see GENIL.H) objects.&nbsp; <b>GenILref</b> is a typedef (see TYPEDEFS.H)
+    for the <b>genIL</b> class (see GENIL.H).
+      <ul>
+      <li>
+      **** <b>compiler::cmpPrepOutput</b> (in COMP.CPP) ****
+      </li>
+      <li>
+      Call <b>writePE::WPEinit</b> (in PEWRITE.CPP) to create sections (in
+      RAM for now) for the PE (Portable Executable) output file buffer.&nbsp; Sections for text, data, and rdata are created.&nbsp;
+      If a DLL is being
+      produced then create a relocation section as well.&nbsp; Create the CLR metadata emitter and initialize it for emitting metadata using the
+      metadata API's on a COM interface.&nbsp; Add the appropriate import for
+      the entry point to MSCOREE.DLL based on whether we are generating an
+      EXE or DLL output file.&nbsp; Reserve space for the entry point code.
+      </li>
+      <li>
+      Call <b>genIL::genInit</b> (in GENIL.CPP) to initialize the IL
+      Generator.
+      </li>
+      </ul>
+    </li>
+    <li>
+    Make sure <b>String</b>, <b>Object</b>, and <b>Class</b> are declared
+    early.
+    </li>
+    <li>
+    Call <b>compiler::cmpDeclConsts</b> for the second time to recursively
+    visit all namespaces to complete the declaration of constants and
+    enums.
+    </li>
+    <li>
+    Call <b>compiler::cmpDeclSym</b> (in COMP.CPP) to declare all the
+    symbols we have found so far.&nbsp; <b>cmpDeclSym</b> eventually promotes
+    the symbols to the <b>CS_DECLARED</b> compile state and recursively
+    calls itself to handle all child namespaces.
+    </li>
+    <li>
+    Loop (calling <b>compiler::cmpCompSym</b> in COMP.CPP) to compile any
+    variables that are undimensioned arrays.&nbsp; This promotes them to the
+    <b>CS_COMPILED</b> state.
+    </li>
+    <li>
+    Perform several separate loops (calling
+    <b>compiler::cmpGenSymMetadata</b> in COREXP.CPP) to generate the
+    metadata for all types, global functions, global variables, class
+    members, and enum members.&nbsp; For expanded details see the
+    <a href="#MDExport">Metadata Export</a> section later in this document.
+    </li>
+    <li>
+    Form the full path name (with extension) of the output executable
+    file.
+    </li>
+    </ul>
+  <li>
+  Call <b>compiler::cmpClass</b> (in COMP.CPP) to compile all of the
+  classes seen so far in the compilation.&nbsp; Each class and all of its
+  dependents are compiled.&nbsp; Start at the top global namespace and compile
+  all classes found in the compilation units.
+  <ul>
+    <li>
+    **** <b>compiler::cmpClass</b> (in COMP.CPP) ****
+    </li>
+    <li>
+    Call <b>compiler::cmpCompSym</b> (in COMP.CPP) to find and promote the
+    class symbols to the <b>CS_COMPILED</b> state.&nbsp; This compiles all
+    symbols and generates IL code for them. <b>cmpCompSym</b> recursively
+    calls itself to handle all child symbols.&nbsp; For expanded details see the
+    <a href="#ILGen">IL Generation</a> section later in this document.
+    </li>
+  </ul>
+  </li>
+  <li>
+  Call <b>compiler::cmpDone</b> (in COMP.CPP) to shutdown the IL generator
+  and to use the PE writer to complete the writing of the output
+  executable and to shutdown SMC.&nbsp; For expanded details see the <a href="#PEWrite">PE Writing</a> section later in this document.
+  </li>
+</ul>
+
+
+<h4><a name="MDImport"></a>
+Metadata Import</h4>
+<p>
+In the previous Functional Walkthrough section, a single outline entry
+(within <b>compiler::cmpInit</b>) indicated that metadata was imported
+early in the whole compilation process.&nbsp; The following outline covers that
+metadata importing in more detail.
+
+<ul>
+<li>
+Call <b>compiler::cmpInitMDimp</b> (in CORIMP.CPP) to import the Metadata
+of MSCORLIB.DLL. This makes the rich context of the .NET Framework Class
+Libraries available.
+</li>
+  <ul>
+  <li>
+  **** <b>compiler::cmpInitMDimp</b> (in CORIMP.CPP) ****
+  </li>
+  <li>
+  Call <b>initializeIMD</b> (in CORWRAP.CPP).
+  </li>
+    <ul>
+    <li>
+    **** <b>initializeIMD</b> (in CORWRAP.CPP) ****
+    </li>
+    <li>
+    Call <b>CoInitialize</b> to initialize COM.
+    </li>
+    <li>
+    Call <b>CoInitializeCor</b> to initialize CLR
+    </li>
+    <li>
+    Obtain an interface to a metadata dispenser by calling
+    <b>CoCreateInstance</b> with <b>CLSID_CorMetaDataDispenser</b>.&nbsp; This dispenser is subsequently used to obtain COM interfaces
+    for handling metadata.&nbsp; For example, the <b>IMetaDataImport</b>
+    and <b>IMetaDataEmit</b> interfaces.
+    </li>
+    </ul>
+  <li>
+  Call <b>compiler::cmpImportMDfile</b> (in CORIMP.CPP).
+  </li>
+    <ul>
+    <li>
+    **** <b>compiler::cmpImportMDfile</b> (in CORIMP.CPP) ****
+    </li>
+    <li>
+    Call <b>compile::cmpAddMDentry</b> (in CORWRAP.CPP) to create a
+    metadata importer and add it to  the global importer list.
+    </li>
+    <li>
+    Make sure the DLL file exists.
+    </li>
+    <li>
+    Call <b>metadataImp::MDimportStab</b> (in CORIMP.CPP).
+    </li>
+      <ul>
+      <li>
+      **** <b>metadataImp::MDimportStab</b> (in CORIMP.CPP) ****
+      </li>
+      <li>
+      Convert the file path/name to unicode.
+      </li>
+      <li>
+      Call <b>WMetaDataDispenser::OpenScope</b> (in CORWRAP.CPP) to
+      obtain the IMetaDataImport interface. This is a classic COM
+      interface for metadata importing.
+      </li>
+      <li>
+      Loop calling <b>WMetaDataImport::EnumTypedef</b> (in CORWRAP.CPP) to
+      enumerate top level typedefs and enter them in the symbol table.&nbsp; This
+      uses the <b>IMetaDataImport</b> interface method via the CORWRAP layer.
+      </li>
+      <li>
+      Call <b>metadataImp::MDimportClss</b> (in CORIMP.CPP) to import
+      the typedef/class.
+      </li>
+        <ul>
+        <li>
+        **** <b>metadataImp::MDimportClss</b> (in CORIMP.CPP) ****
+        </li>
+        <li>
+        Call <b>WMetaDataImport::GetNameFromToken</b> (in CORWRAP.CPP) to
+        obtain the name.&nbsp; This calls <b>IMetaDataImport::GetNameFromToken</b>.
+        </li>
+        <li>
+        Call <b>WMetaDataImport::GetTypeDefProps</b> (in CORWRAP.CPP) to
+        obtain the properties.&nbsp; This calls
+        <b>IMetaDataImport::GetTypeDefProps</b>.
+        </li>
+        <li>
+        Call <b>metadataImp::MDparseSlashed</b> (in CORIMP.CPP) to add the
+        name to the symbol table (if it isn't already there).
+        </li>
+          <ul>
+          <li>
+          **** <b>metadataImp::MDparseSlashed</b> (in CORIMP.CPP) ****
+          </li>
+          <li>
+          Call <b>metadataImp::MDhashWideName</b> (in CORIMP.CPP) to obtain
+          an identifier from hash table for the name.
+          </li>
+          <li>
+          Call <b>symTab::stLookupNspSym</b> in (SYMBOL.CPP) to walk the
+          symbol table definitions looking for the symbol.
+          </li>
+          <li>
+          If the symbol is already there, ensure the type is correct.
+          </li>
+          </ul>
+        <li>
+        If the class is not yet known, call <b>symTab::stDeclareSym</b> to
+        create a symbol descriptor, insert it in the appropriate scope,
+        and make it visible via the hash table.
+        </li>
+        <li>
+        Call <b>WMetaDataImport::FindCustomValue</b> (in CORWRAP.CPP) to
+        determine if the symbol was deprecated.
+        </li>
+        <li>
+        Call <b>metadataImp::MDgetAccessLvl</b> (in CORIMP.CPP) to get the
+        access level of the class.
+        </li>
+        <li>
+        Call <b>symTab::stNewClsType</b> (in TYPE.CPP) to create the class
+        type.
+        </li>
+        <li>
+        Promote the class to the <b>CS_KNOWN</b> compile state and mark
+        it as metadata import.
+        </li>
+        <li>
+        Call <b>WMetaDataImport::GetTypeRefProps</b> (in CORWRAP.CPP) to
+        see if the base class is &quot;Delegate&quot;.&nbsp; If so, make current
+        class &quot;Delegate&quot;.
+        </li>
+        </ul>
+      <li>
+      Call <b>WMetaDataImport::CloseEnum</b> (in CORWRAP.CPP) to close the
+      enumerator after completing the enumeration looping.
+      </li>
+      <li>
+      Call <b>metadataImp::MDimportClss</b> again to import any names
+      declared at file scope.
+      </li>
+      <li>
+      Release the <b>IMetaDataImport</b> interface on the metadata importer.
+      </li>
+      </ul>
+    </ul>
+  <li>
+  If there were additional DLLs specified for import then loop to
+  process them as above by calling <b>compiler::cmpImportMDfile</b>
+  (in CORIMP.CPP).
+  </li>
+  </ul>
+</ul>
+
+<h4><a name="MDExport"></a>
+Metadata Export</h4>
+<p>
+In the previous Functional Walkthrough section, a single outline entry
+(within <b>compiler::cmpStart</b>) indicated that
+<b>compiler::cmpGenSymMetadata</b> (in COREXP.CPP) was called in several
+loops to export metadata.&nbsp; These loops cycle through all the previously
+imported metadata symbols (e.g., in the System namespace) but, of course,
+there is no need to generate metadata for them in the output file.&nbsp; The
+metadata APIs (methods on a COM interface obtained earlier) are used for
+the exporting.&nbsp; The metadata engine maintains an internal accumulation of
+the metadata that is to be exported.&nbsp; The metadata engine is later called
+upon to write out this accumulated metadata when the output file is
+written.&nbsp; The following outline expands on some of the metadata exporting
+that is unique to compiling the HELLO.SMC program.&nbsp; The following outline
+covers most of the metadata exporting for typical input programs.&nbsp; However, metadata is also exported in other parts of the SMC compilation
+process (e.g., see the later IL Generation section).
+
+<ul>
+  <li>
+  Loop calling <b>compiler::cmpGenSymMetadata</b> (in COREXP.CPP) to
+  generate the metadata for all types. <b>cmpGenSymMetadata</b>
+  recursively calls itself to handle all child types.&nbsp; If this is a nested
+  class, call <b>compiler::cmpDeclSym</b> (in COMP.CPP) to declare it.
+  </li>
+  <li>
+  Loop calling <b>compiler::cmpGenSymMetadata</b> (in COREXP.CPP) to
+  generate the metadata for all global functions and variables.&nbsp; <b>cmpGenSymMetadata</b> recursively calls itself to handle all child
+  symbols.
+  <ul>
+    <li>
+    **** <b>compiler::cmpGenSymMetadata</b> (in COREXP.CPP) ****
+    </li>
+    <li>
+    Switch based on the symbol type.  When HELLO.SMC's <b>main</b> is
+    reached a call to <b>compiler::cmpGenFncMetadata</b> (in COREXP.CPP)
+    is made to generate metadata for the function.
+    <ul>
+      <li>
+      **** <b>compiler::cmpGenFncMetadata</b> (in COREXP.CPP) ****
+      </li>
+      <li>
+      Call <b>compiler::cmpGenMemberSig</b> (in COREXP.CPP) to create a
+      metadata signature for the given function/data member.
+      <ul>
+        <li>
+        **** <b>compiler::cmpGenMemberSig</b> (in COREXP.CPP) ****
+        </li>
+        <li>
+        Compute and emit the calling convention value.
+        </li>
+        <li>
+        Call <b>compiler::cmpMDsigAddTyp</b> (in COREXP.CPP) to add
+        <b>main</b>'s <b>int</b> return type to the signature block.
+        </li>
+        <li>
+        Since we are processing <b>main</b> we call
+        <b>compiler::cmpMDsigAddTyp</b> to append to the signature block
+        the content for the argument type (the <b>args</b> managed
+        String array in this case).
+        </li>
+        <li>
+        Call appropriate <b>compiler::cmpMDsigAdd___</b> methods (in
+        COREXP.CPP) to add items to the growing metadata signature block.
+        </li>
+      </ul>
+      </li>
+      <li>
+      Finally call the metadata emitter interface's <b>DefineMethod</b>
+      method to emit the accumulated metadata for the <b>main</b> function.&nbsp;
+      A pointer to the emitter interface, <b>IMetaDataEmit</b>, is
+      kept in <b>writePE::WPEwmde</b> (see PEWRITE.H).
+      </li>
+    </ul>
+    </li>
+  </ul>
+  </li>
+  <li>
+  Loop calling <b>compiler::cmpGenSymMetadata</b> (in COREXP.CPP) to
+  generate the metadata for all class and enum members.&nbsp; <b>cmpGenSymMetadata</b> recursively calls itself to handle all child
+  symbols.
+  </li>
+</ul>
+
+<h5>Metadata Token Remapping</h5>
+<p>
+In SMC, metadata is generated in the back end passes for every symbol as
+it is encountered.&nbsp; This is done before code generation because of the
+requirements of metadata export.&nbsp; When symbols are defined using metadata,
+the metadata emitter gives back tokens as identifiers for the items
+defined.&nbsp; These tokens are opaque 32-bit numbers that are basically indices
+into metadata tables.&nbsp; When you generate a call to a method, the IL call
+opcode takes an operand that is a metadata token for the function being
+called.&nbsp; When you later want to write out the metadata image to the
+executable file, the metadata engine can remap the tokens as it
+consolidates its tables.&nbsp; As a client of the metadata engine (i.e., as a
+user of the <b>IMetaDataEmit</b> interface) you are faced with two basic
+ways of handling the prospect of token remapping:
+
+<ul>
+  <li>
+  You can explicitly handle any token remapping.
+  </li>
+  <li>
+  You can accommodate to the token order imposed by the metadata engine.
+  </li>
+</ul>
+
+<p>
+If you take the first course, you must record the location of all the
+tokens you have received because the metadata engine can remap the tokens
+later.&nbsp; After such a remap you must regenerate and reassign the tokens you
+recorded.
+
+<p>
+SMC is based on the second course and does not do its own explicit token
+remapping.&nbsp; To avoid remapping, SMC must generate all of its metadata ahead
+of time (i.e., before code generation).&nbsp; If you take this course, you must
+generate your metadata--for definitions--in the following basic order:
+
+<ol>
+  <li>
+  Metadata for top-level types, namespaces, classes, and enums.
+  </li>
+  <li>
+  Metadata for global (i.e., file scope) functions and variables.
+  </li>
+  <li>
+  Metadata for all members of all classes.
+  </li>
+</ol>
+
+<p>
+If you use the metadata emitter to generate metadata in this order then
+you do not have to later regenerate all the metadata tokens.&nbsp; However,
+this course is a delicate thing to get right.&nbsp; So if you choose not to do
+your own token remapping, you must generate your metadata in the precise
+order that is coded in SMC.&nbsp; To be safe, this entails the blanket approach
+of generating metadata for all symbols seen.&nbsp; An example of this in SMC is
+its use of the Win32 API headers.&nbsp; In these headers SMC sees a large set of
+classes, function prototypes, etc.&nbsp; But it does not know which of these
+will actually be used in the compiled program until it compiles all of the
+program's code.&nbsp; Yet the choice was made to have SMC generate the metadata
+before code is generated.&nbsp; So SMC generates metadata for all of the Win32
+symbols before code generation.&nbsp; Knowing this is the case, it can be
+worthwhile to hand-optimize the include headers.
+
+<p>
+In light of the token remapping issue, the order-sensitive generation of
+metadata applies mainly to program definitions (e.g., namespaces, classes,
+enums, functions, methods, and variables).&nbsp; Metadata for string literals
+and external references can be emitted more freely throughout the
+compilation process.
+
+<h4><a name="ILGen"></a>
+IL Generation</h4>
+<p>
+In the previous Functional Walkthrough section, a single outline entry
+(within <b>compiler::cmpClass</b>) indicated that
+<b>compiler::cmpCompSym</b> is called to compile all symbols and to
+generate code for them.&nbsp; The following outline covers the IL code
+generation that is performed.&nbsp; At this point in the walkthrough, we will
+assume that the symbol is that of the <b>main</b> function of the
+HELLO.SMC program being compiled,
+
+<ul>
+  <li>
+  **** <b>compiler::cmpCompSym</b> (in COMP.CPP) ****
+  </li>
+  <li>
+  If the symbol is in the current scope then compile this symbol only and
+  return.
+  </li>
+  <li>
+  If the symbol is for a class that was already imported from metadata
+  then simply return because there is no need to generate code for it.
+  </li>
+  <li>
+  If the symbol is for a namespace, compilation unit, typedef, enum value,
+  or an enum then recursively call <b>compiler::cmpCompSym</b> to compile
+  the symbol and its child symbols.
+  </li>
+  <li>
+  Look for an existing definition of the symbol.&nbsp; If the definition found
+  is for a variable call <b>compiler::cmpCompVar</b> (in COMP.CPP) to
+  generate code for the variable.&nbsp; If the definition found is for a
+  function/method, call <b>compiler::cmpCompFnc</b> (in COMP.CPP) to
+  generate code for the function.&nbsp; In the case of HELLO.SMC assume the
+  &quot;<b>main</b>&quot; function was found.
+  </li>
+  <ul>
+    <li>
+    **** <b>compiler::cmpCompFnc</b> (in COMP.CPP) ****
+    </li>
+    <li>
+    If metadata for the parent class has not already been generated,
+    then call <b>compiler::cmpGenFncMetadata</b> (in COREXP.CPP)
+    to do so.
+    </li>
+    <li>
+    If the function is built in and compiler defined then create a body
+    for the function.
+    </li>
+    <li>
+    If the function is source-defined then call
+    <b>parser::parsePrepText</b> (in PARSER.CPP) to restart the scanner,
+    calling <b>scanner::scanRestart</b> (in SCAN.CPP) on the specified
+    section of source text which has been previously scanned.&nbsp; Loop calling
+    <b>scanner::scan</b> (in SCAN.CPP) to run the scanner (replaying
+    previously scanned tokens) until the function body is reached (it
+    begins with a '{' character).
+    </li>
+    <li>
+    Call <b>parser::parseFuncBody</b> (in PARSER.CPP) to parse the function
+    body.&nbsp; At this point we are parsing the body of <b>main</b>, the only
+    function in the HELLO program.
+    </li>
+    <ul>
+      <li>
+      **** <b>parser::parseFuncBody</b> (in PARSER.CPP) ****
+      </li>
+      <li>
+      Call <b>parser::parseFuncBlock</b> (in PARSER.CPP) to parse the
+      function block.
+      </li>
+      <ul>
+        <li>
+        **** <b>parser::parseFuncBlock</b> (in PARSER.CPP) ****
+        </li>
+        <li>
+        Call <b>parser::parseCreateNode</b> (in TREE.CPP) to create a
+        new parse tree node for the block.&nbsp; Add this node to the current
+        scope list.
+        </li>
+        <li>
+        Loop calling <b>parser::parseLclDclMake</b> and
+        <b>parser::parseLclDclDecl</b> (in PARSER.CPP) to create a parse
+        tree declaration node for each function argument.&nbsp; After each node
+        creation, call <b>parser::parseAddToNodeList</b> (in PARSER.CPP)
+        to add the node to the argument list.&nbsp; This grows the parse tree,
+        adding nodes for the <b>main</b> function's arguments.&nbsp; In the case
+        of <b>main</b> one argument, a node for the <b>args</b> managed
+        String array, is added to the parse tree.
+        </li>
+        <li>
+        Loop calling <b>parser::parseFuncStmt</b> (in PARSER.CPP) to parse
+        each statement in <b>main</b>'s function body and add it to the
+        parse tree statement list.&nbsp; For each statement, call
+        <b>parser::parseIsTypeSpec</b> (in PARSER.CPP) and if any
+        identifier is found, call the scanner to look ahead one token to
+        determine if the identifier is a type.&nbsp; During this process, the
+        <b>Console.WriteLine</b> call statement (in HELLO.SMC) is
+        encountered.&nbsp; To handle this, <b>parser::parseNameUse</b> (in
+        PARSER.CPP) is called to parse a name reference and return the
+        corresponding symbol.
+        <ul>
+          <li>
+          **** <b>parser::parseNameUse</b> (in PARSER.CPP) ****
+          </li>
+          <li>
+          Call <b>parser::parseLookupSym</b> (in PARSER.CPP) to
+          lookup the name within the current local scopes.&nbsp; A local
+          symbol cannot be a type.
+          </li>
+          <li>
+          Call <b>scanner::scanLookAhead</b> (in SCAN.CPP) to determine
+          if the symbol is followed by a '.' or a ':'. In this case
+          the <b>Console</b> is followed by a '.' and we call
+          <b>symTab::stLookupSym</b> (in SYMBOL.CPP) to lookup the
+          name in the current symbol table.&nbsp; This leads us to call
+          <b>symTab::stSearchUsing</b> (in SYMBOL.CPP) to look inside
+          a 'using' section for an unambiguous definition of the symbol.&nbsp; <b>Console</b> is found--it was a reference imported from
+          metadata.
+          </li>
+          <li>
+          Call <b>scanner::scan</b> (in SCAN.CPP) to scan for the expected
+          identifier after &quot;Console.&quot;.&nbsp; This obtains the
+          <b>WriteLine</b> method name.
+          </li>
+          <li>
+          Call <b>symTab::stLookupAllCls</b> (in INLINES.H) to look up
+          the <b>WriteLine</b> member of the <b>Console</b> class.
+          <ul>
+            <li>
+            **** <b>symTab::stLookupAllCls</b> (in INLINES.H) ****
+            </li>
+            <li>
+            Call <b>compiler::cmpDeclSym</b> (in INLINES.H) to ensure
+            the symbol is promoted to the <b>CS_DECLARED</b> state.
+            <ul>
+              <li>
+              **** <b>compiler::cmpDeclSym</b> (in INLINES.H) ****
+              </li>
+              <li>
+              Because <b>Console</b> is an imported class, call
+              <b>metadataImp::MDimportClass</b> (in CORIMP.CPP) to import
+              metadata for a single class.&nbsp; This is an example of metadata
+              being imported on demand as compilation proceeds.&nbsp; <b>MDimportClass</b> calls metadata APIs
+              <b>IMetaDataImport::GetNameFromToken</b> and
+              <b>IMetaDataImport::GetTypeDefProps</b> to obtain metadata
+              for the <b>Console</b> class.  <b>MDimportClss</b>
+              recursively imports metadata for the class.&nbsp; Metadata API
+              <b>IMetaDataImport::EnumMembers</b> is called to enumerate
+              the members of the class.&nbsp; <b>metadataImp::MDimportMem</b>
+              (in CORIMP.CPP) is eventually called to import the metadata
+              for the <b>WriteLine</b> member method.&nbsp; <b>symTab::stNewFncType</b> (in TYPE.CPP) and
+              <b>symTab::stDeclareSym</b> (in SYMBOL.CPP) are called to
+              add hash and symbol table entries for the newly imported
+              <b>WriteLine</b>.&nbsp; The new <b>WriteLine</b> entry is also
+              promoted to the <b>CS_DECLARED</b> state.
+              </li>
+            </ul>
+            </li>
+          </ul>
+          </li>
+        </ul>
+        </li>
+        <li>
+        Loop back in <b>parseFuncBlock</b> to parse all the statements in
+        the block.&nbsp; Similar to the above handling of <b>WriteLine</b>,
+        this will compile the <b>return</b> statement of HELLO.SMC's
+        <b>main</b> function.
+        </li>
+      </ul>
+    </ul>
+    <li>
+    Call <b>genIL::genFuncBeg</b> (in GENIL.CPP) to generate the IL for the
+    start of the function.
+    </li>
+    <ul>
+      <li>
+      Call <b>genIL::genEHtableInit</b> (in GENIL.CPP) to initialize
+      the exception handler table logic.
+      </li>
+      <li>
+      Call <b>genIL::genTempVarBeg</b> (in GENIL.CPP) to initialize
+      for using temp variables.
+      </li>
+      <li>
+      Call <b>genIL::genSectionBeg</b> (in GENIL.CPP) to start emitting
+      IL code for a function.&nbsp; <b>genSectionBeg</b> calls
+      <b>genIL::genBegBlock</b> (in GENIL.CPP) to allocate and start a
+      new block of code.
+      </li>
+      <li>
+      Call <b>genIL::genLineNumInit</b> (in GENIL.CPP) to initialize the
+      line# recording logic.&nbsp; This is called once per function.
+      </li>
+    </ul>
+    <li>
+    If the function has labels, declare all the labels and create IL entries
+    for them.
+    </li>
+    <li>
+    Call <b>compiler::cmpGenFNbodyBeg</b> (in GENCODE.CPP) to generate IL
+    for the function.
+    </li>
+    <ul>
+      <li>
+      **** <b>compiler::cmpGenFNbodyBeg</b> (in GENCODE.CPP) ****
+      </li>
+      <li>
+      Call <b>compiler::cmpBlock</b> (in GENCODE.CPP) to process
+      the function body--a block of statements.
+      </li>
+      <ul>
+        <li>
+        **** <b>compiler::cmpBlock</b> (in GENCODE.CPP) ****
+        </li>
+        <li>
+        If there were any local variables or arguments, call
+        <b>compiler::cmpBlockDecl</b> (in GENCODE.CPP) to declare
+        them and add appropriate entries to the symbol table.
+        </li>
+        <ul>
+          <li>
+          **** <b>compiler::cmpBlockDecl</b> (in GENCODE.CPP) ****
+          </li>
+          <li>
+          Call <b>symTab::stDeclareLcl</b> (in SYMBOL.CPP) to declare the
+          local variable/argument symbol.&nbsp; At this point the <b>args</b>
+          argument of HELLO.SMC's <b>main</b> function is declared and
+          promoted to the <b>CS_KNOWN</b> state.
+          </li>
+          <li>
+          Call <b>compiler::cmpBindType</b> (in BIND.CPP) to check and set
+          the type of the local variable/argument.&nbsp; In this case the
+          <b>args</b> argument is a managed String array.&nbsp; So
+          <b>compiler::cmpBindArrayType</b> (in BIND.CPP) is called to
+          check the dimensions of the array.&nbsp; <b>cmpBindType</b> is also
+          called recursively to check the element types.
+          </li>
+        </ul>
+        <li>
+        Loop calling <b>compiler::cmpStmt</b> (in GENCODE.CPP) to bind all
+        the statements &amp; declarations in the block.&nbsp; At this point during
+        the first loop the <b>args</b> argument symbol is promoted to the
+        <b>CS_DECLARED</b> state.&nbsp; Assume here that we have cycled through
+        the loop and are now calling <b>cmpStmt</b> to bind <b>main</b>'s
+        <b>Console.WriteLine</b> call (which is the next statement in
+        HELLO.SMC).
+        </li>
+        <ul>
+          <li>
+          **** <b>compiler::cmpStmt</b> (in GENCODE.CPP) ****
+          </li>
+          <li>
+          At this point <b>compiler::cmpBindExpr</b> (in INLINES.H) is
+          called to bind an expression tree.&nbsp; Because we are processing a
+          call, <b>compiler::cmpBindCall</b> (in BIND.CPP) is called to
+          bind the call.&nbsp; <b>cmpBindCall</b> calls
+          <b>compiler::cmpBindExprRec</b> which recursively binds the
+          parse tree for the <b>WriteLine</b> call and its &quot;hello
+          world&quot; string literal argument.&nbsp; During this the function
+          and its arguments are checked for errors by a call to
+          <b>compiler::cmpCheckFuncCall</b> (in BIND.CPP).
+          </li>
+          <li>
+          After binding the statement parse trees, call
+          <b>genIL::genExpr</b> (in GENIL.CPP) to actually generate IL
+          binary for the expressions.&nbsp; In this case assume that the bound
+          parse tree for the <b>WriteLine</b> call is being processed.&nbsp; <b>genExpr</b> calls <b>genIL::genCall</b> (in GENIL.CPP) to
+          generate the IL for the call expression.
+          </li>
+          <ul>
+            <li>
+            **** <b>genIL::genCall</b> (in GENIL.CPP) ****
+            </li>
+            <li>
+            <b>genCall</b> loops to call itself recursively to generate
+            code for <b>WriteLine</b>'s argument list.
+            </li>
+            <li>
+            Call <b>genIL::genStringLit</b> to generate IL for the
+            &quot;hello world&quot; string literal argument.&nbsp; This calls
+            <b>genIL::genOpcode_tok</b> (in GENIL.CPP).
+            </li>
+            <ul>
+              <li>
+              **** <b>genIL::genOpcode_tok</b> (in GENIL.CPP) ****
+              </li>
+              <li>
+              Call <b>compiler::cmpMDstringLit</b> (in COREXP.CPP) to
+              obtain the metadata token for the string literal.
+              </li>
+              <li>
+              Call <b>genIL::genOpcodeOper</b> (in GENIL.CPP) to generate
+              the IL encoding for the given IL opcode--for a string literal
+              in this case.&nbsp; Eventually, <b>genIL::genILdata_I1</b> (in
+              GENIL.CPP) is called to add the IL code to the IL output
+              stream buffer--an IL <b>ldstr</b> opcode along with its
+              token parameter are output.&nbsp; You can see the log of this
+              IL generation using SMC's -g option.
+              </li>
+            </ul>
+            <li>
+            After the above generation of IL for the string literal
+            argument, <b>genCall</b> then calls <b>genIL::genMethodRef</b>
+            (in GENIL.CPP) to generate the metadata for the target of the
+            actual <b>WriteLine</b> call.&nbsp; This process is similar to the
+            one above for its string literal argument.&nbsp; Metadata for the
+            method ref is generated and then <b>genIL::genOpcode_tok</b>
+            (in GENIL.CPP) is called to generate the call opcode.
+            </li>
+          </ul>
+        </ul>
+        <li>
+        Call <b>compiler::cmpStmt</b> (in GENCODE.CPP) to generate IL
+        code for <b>main</b>'s <b>return</b> statement.&nbsp; The process is
+        similar to that seen above for the <b>WriteLine</b> call.
+        </li>
+      </ul>
+    </ul>
+    <li>
+    Call <b>compiler::cmpGenLocalSig</b> (in COREXP.CPP) to construct
+    the metadata signature for all non-argument local variables.
+    </li>
+    <ul>
+      <li>
+      **** <b>compiler::cmpGenLocalSig</b> (in COREXP.CPP) ****
+      </li>
+      <li>
+      Call <b>compiler::cmpMDsigStart</b> (in COREXP.CPP) to start the
+      metadata signature logic.
+      </li>
+      <li>
+      Call <b>compiler::cmpMDsigAdd_I1</b> (in COREXP.CPP) to add
+      magic value marking start of the signature.
+      </li>
+      <li>
+      Call <b>compiler::cmpMDsigAddCU4</b> (in COREXP.CPP) to add a
+      count of locals to the signature.
+      </li>
+      <li>
+      Call <b>compiler::cmpGenLocalSigRec</b> (in COREXP.CPP) to
+      recursively add signatures for all the user-declared local
+      variables.
+      </li>
+      <li>
+      Call <b>compiler::cmpMDsigAdd_I1</b> (in COREXP.CPP) to add a mark
+      for the signature end.
+      </li>
+    </ul>
+    <li>
+    Call <b>genIL::genFuncEnd</b> (in GENIL.CPP) to generate final IL for
+    the <b>main</b> function.
+    </li>
+    <ul>
+      <li>
+      **** <b>genIL::genFuncEnd</b> (in GENIL.CPP) ****
+      </li>
+      <li>
+      Call <b>genIL::genSectionEnd</b>(in GENIL.CPP) to finish emitting
+      code for a function.&nbsp; This calls <b>genIL::genEndBlock</b> (in
+      GENIL.CPP) to finish the current code block.
+      </li>
+      <ul>
+        <li>
+        **** <b>genIL::genEndBlock</b> (in GENIL.CPP) ****
+        </li>
+        <li>
+        A more permanent buffer is allocated for the code and
+        the code is copied into it.
+        </li>
+        <li>
+        Call <b>genIL::genJumpMaxSize</b> (in GENIL.CPP) to record any
+        jumps that may follow the block.&nbsp; There aren't any in HELLO.SMC.
+        </li>
+        <li>
+        Update the current code offset to reflect the code added.
+        </li>
+      </ul>
+      <li>
+      Compute the total size of the code added.
+      </li>
+      <li>
+      Call <b>genIL::genTempVarEnd</b> (in GENIL.CPP) to finish using
+      temp variables and to ensure that all temps have been freed.
+      </li>
+      <li>
+      Call <b>writePE::WPEallocCode</b> (in PEWRITE.CPP) to allocate space
+      in the code section for the code.&nbsp; This calls
+      <b>writePE::WPEsecRsvData</b> (in PEWRITE.CPP) to reserve the space.
+      </li>
+      <li>
+      Call <b>COR_ILMETHOD::Emit</b> (in GENIL.CPP) to emit the header and
+      adjust the offset past it.
+      </li>
+      <li>
+      Call <b>genIL::genSectionCopy</b> (in GENIL.CPP) to copy the IL code
+      to the allocated (reserved) Code section.
+      </li>
+    </ul>
+    <li>
+    Call <b>compiler::cmpGenFNbodyEnd</b> (in GENCODE.CPP) to finish up
+    any book-keeping in the code generator.
+    </li>
+    <li>
+    Call <b>IMetaDataEmit::SetRVA</b> (via pointer <b>writePE::WPEwmde</b>
+    in PEWRITE.H) to set the RVA (Relative Virtual Address) for the
+    function's metadata definition.
+    </li>
+    <li>
+    Release any memory allocated during code generation.
+    </li>
+  </ul>
+  <li>
+  If the symbol is for a function, then loop back to handle any overloaded
+  cases of the symbol.
+  </li>
+</ul>
+
+<h4><a name="PEWrite"></a>
+PE Writing</h4>
+<p>
+In the previous Functional Walkthrough section, a single outline entry
+within <b>compileAll</b> (in SMC.CPP) indicated that
+<b>compiler::cmpDone</b> is called to shutdown the IL generator, use the
+PE writer to complete the writing of the output executable file, and to
+shutdown SMC.&nbsp; The following outline covers this in more detail.
+
+<ul>
+  <li>
+  **** <b>compiler::cmpDone</b> (in COMP.CPP) ****
+  </li>
+  <li>
+  Call <b>genIL::genDone</b> (in GENIL.CPP) to finish IL generation and to
+  shutdown the IL generator. Write out the string pool and free all temp
+  variables--there were neither in HELLO.SMC.
+  </li>
+  <li>
+  If an input .RES resource file was specified then call
+  <b>writePE::WPEaddRCfile</b> (in PEWRITE.CPP) to add it to the output
+  file buffer.&nbsp; No .RES file was specified for the compiler of HELLO.SMC.
+  </li>
+  <li>
+  Call <b>writePE::WPEDone</b> (in PEWRITE.CPP) to setup for final writing
+  of the output executable.&nbsp; Finish writing the output file buffer, flush
+  the buffer to the output file, and close the file.
+  </li>
+  <ul>
+    <li>
+    **** <b>writePE::WPEDone</b> (in PEWRITE.CPP) ****
+    </li>
+    <li>
+    Loop to drop any output PE sections that are empty.
+    </li>
+    <li>
+    Calculate the virtual base address of the image.&nbsp; This address
+    must be a multiple of 64K.
+    </li>
+    <li>
+    Allocate space for the DOS header, the PE/COFF header, the optional
+    header, and the section table header.
+    </li>
+    <li>
+    Calculate the RVA (Relative Virtual Address) of the main entry point.
+    </li>
+    <li>
+    Loop to record the RVA and section offsets for the various kinds of
+    output sections: TEXT, DATA, RDATA, RSRC, and RELOC.  For RDATA, call
+    <b>writePE::WPEimportDone</b> (in PEWRITE.CPP) which allocates space
+    for the IAT import directory, the IDT Import Directory Table, and the
+    import lookup table.
+    </li>
+    <li>
+    Call <b>writePE::WPEgetCOMplusSize</b> (in PEWRITE.CPP) to finalize
+    metadata output and obtain the total size of the COM+ tables.&nbsp; Call
+    <b>IMetaDataEmit::GetSaveSize</b> (via pointer <b>writePE::WPEwmde</b>
+    in PEWRITE.H) to get the size of the metadata that has been emitted
+    up to this point.
+    </li>
+    <li>
+    Calculate the RVA of the string pool.
+    </li>
+    <li>
+    Call <b>outFile::outFileOpen</b> (in OUTFILE.CPP) to open/create
+    the output executable file.
+    </li>
+    <li>
+    Fill in the DOS header and call <b>outFile::outFileWriteData</b>
+    (in OUTFILE.CPP) to write out the DOS header.
+    </li>
+    <li>
+    Call <b>outFile::outFileWriteData</b> to write out the DOS stub.
+    </li>
+    <li>
+    Fill in the COFF header and call <b>outFile::outFileWriteData</b>
+    (in OUTFILE.CPP) to write out the COFF header.
+    </li>
+    <li>
+    Fill in the Optional COFF header and call
+    <b>outFile::outFileWriteData</b> (in OUTFILE.CPP) to write out the
+    Optional COFF header.
+    </li>
+    Loop calling <b>outFile::outFileWriteData</b> (in OUTFILE.CPP) to
+    write out the section table.
+    <li>
+    Loop calling <b>outFile::outFileWriteData</b> (in OUTFILE.CPP) to
+    write out the content of all the sections. Call
+    <b>outFile::outFileWritePad</b> (in OUTFILE.CPP) to pad each section
+    up to the next file alignment boundary.&nbsp; For the RDATA section call
+    <b>writePE::WPEgenCOMplusData</b> (in PEWRITE.CPP) to output the
+    COM+ data.
+    </li>
+    <ul>
+      <li>
+      **** <b>writePE::WPEgenCOMplusData</b> (in PEWRITE.CPP) ****
+      </li>
+      <li>
+      Fill in the COM+ header and call <b>outFile::outFileWriteData</b>
+      (in OUTFILE.CPP) to write the COM+ header to the output file.
+      </li>
+      <li>
+      Call <b>IMetaDataEmit::SaveToMemory</b> (via pointer
+      <b>writePE::WPEwmde</b> in PEWRITE.H) to output the Metadata to
+      a memory image.
+      </li>
+      <li>
+      Call <b>outFile::outFileWriteData</b> (in OUTFILE.CPP) to write
+      the metadata into the output file.
+      </li>
+      <li>
+      Call <b>writePE::WPEdoneRCimp</b> (in PEWRITE.CPP) to shut down
+      the .RES file import logic.
+      </li>
+      <li>
+      Call <b>writePE::WPEdoneMDemit</b> (in PEWRITE.CPP) to shut down the
+      metadata emitter.&nbsp; This involves calling
+      <b>IMetaDataEmit::Release</b> to the release the metadata emitter
+      interface.
+      </li>
+    </ul>
+    <li>
+    Call <b>outFile::outFileWritePad</b> (in OUTFILE.CPP) to pad the file
+    to a multiple of a page size (i.e., to a 512 byte boundary).&nbsp; Note:
+    You must do this padding in order for the PE loader to load the
+    executable properly.
+    </li>
+    <li>
+    Call <b>outFile::outFileDone</b> (in OUTFILE.CPP) to perform the final
+    flush on the output file, to close the output file, and free up the
+    resources owned by it.
+    </li>
+    <ul>
+      <li>
+      **** <b>outFile::outFileDone</b> (in OUTFILE.CPP) ****
+      </li>
+      <li>
+      Call <b>outFile::outFileClose</b> (in OUTFILE.CPP) to perform the
+      final flush on the file by calling <b>outFile::outFileFlushBuff</b>
+      (in OUTFILE.CPP) to flush/write the file buffer to the file.&nbsp; Free
+      the output file buffer. Finally, call <b>_close</b> to actually
+      close the output file.
+      </li>
+    </ul>
+  </ul>
+  <li>
+  Call <b>compiler::cmpDoneMDimp</b> (in CORIMP.CPP) to call a final
+  <b>Release</b> on the metadata dispenser.
+  </li>
+</ul>
+
+
+<h3><a name="FileList"></a>
+File List</h3>
+
+<p>
+The SMC sample consists of the following files listed in two tables. The
+first table lists the files that are compiled to produce the SMC compiler
+(either SMC.EXE or SMCIL.EXE).
+
+<p>
+<table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="95%">
+<tr>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>File Name</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Contents</b>
+   </font></th>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+ALLOC.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Low level memory allocation. Implements the <b>norls_allocator</b> and
+<b>block_allocator</b> classes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+ALLOC.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Low level memory allocation. Declares the <b>norls_allocator</b> and
+<b>block_allocator</b> classes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+BIND.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Implements <b>compiler</b> methods for binding expressions, references,
+assignments, variables, functions, etc.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+COMP.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Main internal engine of the compiler. Implements the <b>compiler</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+COMP.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declaration of the main <b>compiler</b> and <b>symTab</b> classes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+CONFIG.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declares the <b>compConfig</b> struct for storing command-line options.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+COREXP.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Implements the metadata export methods for the <b>compiler</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+CORIMP.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Implements the metadata import methods for the <b>metadataImp</b> and <b>compiler</b> classes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+COR-TEMP.C
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Has copies of
+   </font>
+
+</font>
+
+   <font face="Arial" size="2">CLR </font><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2"><font FACE="Arial" SIZE="2">header structs used during SMC self compilation.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+ERROR.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Implements the general error and warning methods for the <b>compiler</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+ERROR.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Macros and declarations for error handling.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+ERRORS.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The general error and warning list with message strings.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+FOLDEXPR.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Implements constant expression folding methods for the <b>compiler</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+GENCODE.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Implements the statement binding and code generation methods for the <b>compiler</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+GENIL.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Intermediate Language (IL) generation. Implements the methods of the <b>genIL</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+GENIL.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Has the declaration of the <b>genIL</b> class and related declarations.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+HASH.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Global Hash Table. Implements the methods of the <b>hashTab</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+HASH.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Global Hash Table. Declaration of the <b>hashTab</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+HOST.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Non-portable host-specific macros and declarations.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+IMPORTS.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Import declarations for various C-runtime functions. Used only
+for self-compilation in lieu of standard C++ headers.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+INFILE.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declaration of the <b>infile</b> class for stream file input.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+INLINES.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Various inline methods for the <b>compiler</b>, <b>parser</b>, and <b>symTab</b> classes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+KEYWORDS.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The keyword declarations for SMC's managed C++ language.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+MACROS.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+For tables that are built using keyword and opcode macros.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+MACROS.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Address and array macros.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+MACROS.I
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Preprocessor-produced from MACROS.CPP. Used in managed compiles.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+MAKEFILE
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The makefile for building this code sample.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+OPCODES.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Defines an enum of all IL opcodes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+OUTFILE.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Buffered file output. Implements the methods of the <b>outFile</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+OUTFILE.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Buffered file output. Declares the methods of the <b>outFile</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+PARSER.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The parser. Implementation of the <b>parser</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+PARSER.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The parser. Declaration of the <b>parser</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+PEWRITE.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Write Portable Executable. Implementation of the <b>WPEnameRec</b>,
+<b>WPEhashTab</b>, and <b>writePE</b> classes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+PEWRITE.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Write Portable Executable. Declaration of the <b>WPEnameRec</b>,
+<b>WPEhashTab</b>, and <b>writePE</b> classes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SCAN.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The scanner. Implementation of the <b>scanner</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SCAN.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The scanner. Declaration of the <b>scanner</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMC.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Main compiler control. Has <b>main</b> entry and option processing.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMC.DSP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Visual Studio project file (for Visual C++ compilation).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMC.DSW
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Visual Studio workspace file (for Visual C++ compilation).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMC.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Has declarations and nested includes for SMC.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMC.HTM
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The Sample Tour documentation for the sample.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMC.LST
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Command-line option response file for the self-compilation of SMC.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMCPCH.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Pre-compiled nested includes for VC++ compilation of SMC.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SMCSELF.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declarations used during self-compilation of SMC.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SYMBOL.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Symbol table. Implementation of the <b>symTab</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SYMBOL.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declaration of symbol table related classes including the <b>SymDefRec</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+SYMSIZES.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Definition of the symbol type sizes.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TOKENS.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declares the kinds of tokens. Declaration of the <b>tokens</b> enum.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TOPLIST.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declares operators used in parse trees.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TREE.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Implementation of parse tree methods of the <b>parser</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TREENODE.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declaration of the <b>TreeNode</b> class (i.e., for nodes of parse trees).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TREEOPS.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Parse tree operations. Declaration of the <b>treeOps</b> enum.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TYPE.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Symbol types. Implementation of the symbol type methods of the <b>symTab</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TYPE.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Symbol types. Declaration of the <b>TypDefRec</b> class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TYPEDEFS.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Typedefs for the principal classes within SMC.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TYPELIST.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declaration of the built-in data types supported by SMC.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+TYPSIZES.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declaration of the sizes of the built-in data types.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+VARTYPE.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Variable types. Definition of the <b>var_types</b> enum.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+VERSION.C
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+The SMC version string.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+WIN32.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declarations for using Win32 platform-specific functions.
+   </font></td>
+</tr>
+
+</table>
+
+<p>
+The following table lists the files that are compiled to produce
+<b>CORWRAP.DLL</b>.
+
+<p>
+<table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="95%">
+<tr>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>File Name</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Contents</b>
+   </font></th>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+CORWRAP.CPP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Method implementation for access to
+   </font>
+
+</font>
+
+   <font face="Arial" size="2">CLR </font><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2"><font FACE="Arial" SIZE="2">Metadata APIs. Makes those
+metadata APIs appear as direct calls.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+CORWRAP.H
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Declarations for access to
+   </font>
+
+</font>
+
+   <font face="Arial" size="2">CLR</font><font FACE="VERDANA,ARIAL,HELVETICA" SIZE="2"><font FACE="Arial" SIZE="2">
+ Metadata APIs.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+CORWRAP.DEF
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Module definition file for CORWRAP.DLL.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+CORWRAP.DSP
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Visual Studio project file (for Visual C++ compilation).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+MAKEFILE
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Makefile for building CORWRAP.DLL.
+   </font></td>
+</tr>
+
+</table>
+
+<h3><a name="Usage"></a>
+Usage</h3>
+
+<p>
+The SMC.EXE compiler is used from the command line and is controlled with
+command-line options. It offers the conventional usage help that can be
+obtained by invoking SMC with the -? option (or with no arguments). Here
+is an expanded form of that help information.
+
+<p>
+The SMC command is issued in the following format:
+
+<pre> <font FACE="COURIER" SIZE="3">
+     <b>SMC [options] &lt;source-filename-list&gt;</b>
+</font> </pre>
+
+<p>
+The following table lists the command-line options accepted:
+
+<p>
+<table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="95%">
+<tr>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Option (with Arguments)</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Purpose</b>
+   </font></th>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-?
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Display the usage help (including command-line options) to the console.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-b&lt;base&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set the image base (base value in decimal for now).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-b@file,key
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set the image base/size from a text file using a named (key) entry.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-d
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Create a DLL (default is to create EXE).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-CG{IID}
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set the GUID attribute of the PE file.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-CM&lt;name&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set name of entry point class.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-CN&lt;name&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set the name attribute of the PE file.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-CR&lt;name&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Add the .RES file to the executable image.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-O&lt;filename&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set the name of the output file.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-R
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Recurse into subdirectories (use with wildcards).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-s[filename]
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+* Specify MSCORLIB.DLL location (default: MSCORLIB.DLL in path).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-m[filename]
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Import additional metadata from the given EXE/DLL.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-p[pathlist]
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Search additional path(s) for metadata.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-w{0-4}
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set warning level (default=2).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-w
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Enables all warnings.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-w-
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Disables all warnings.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-w####
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Enables a specific warning.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-w-####
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Disables a specific warning.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-wx
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Treat warnings as errors.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-e&lt;count&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Set maximum number of errors.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-Zi
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Generate full debug info (implies -Zn).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-Zl
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Generate only line# info.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-Zn
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Include parameter names in metadata.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-A
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Enable asserts.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-AS
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Enable asserts with source info.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-D&lt;name&gt;[=value]
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Define a macro.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-a&lt;size&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Default alignment (use size of 1,2,4,8 or 16).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-c
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Default to C-style declarations.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-S
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Typesafe mode.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-P
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Pedantic mode.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-U
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Flag uninitialized local variable use.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+@&lt;filename&gt;
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Input options from a response file (e.g., SMC.LST).
+   </font></td>
+</tr>
+
+</table>
+
+<p>
+The following debug build options are for use during debugging of the
+compiler itself.
+
+<p>
+<table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="95%">
+<tr>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Option (with Arguments)</b>
+   </font></th>
+   <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Purpose</b>
+   </font></th>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-v[level]
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Verbose mode.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-g
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Display generated IL code.
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-gd
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Display generated IL code (detailed).
+   </font></td>
+</tr>
+
+<tr>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+-R
+   </font></td>
+   <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+Display RVA's of methods.
+   </font></td>
+</tr>
+
+</table>
+
+<p>
+NOTE: Follow a toggle flag with '-' to turn it off. Options marked '*' are
+enabled by default.
+
+<p>
+The source filename list may contain wildcards as well as response files
+(of the form '@file.lst').
+
+<p>
+Warnings can be controlled from both the command line and from within a
+source file.&nbsp; All warnings are numbered starting at 4000.&nbsp; For example, the
+'Conversion might lose precision' warning has the number 4005. You can
+turn off this warning with an option on the SMC command line as follows:
+<pre> <font FACE="COURIER" SIZE="2"><b>
+    SMC ... -w-4005 ...
+</b></font> </pre>
+
+<h3><a name="Language"></a>
+Language</h3>
+
+<p>
+In a sense, the SMC Language can be considered a managed evolution of the
+standard C language.&nbsp; In another sense, it can be considered a managed
+variant of the C++ language.&nbsp; A major goal of SMC is to provide an elegant
+language that maps to the CLR-inspired &quot;managed&quot; object/class
+semantics fostered so well by the .NET Framework while also supporting
+an easy transition from the C and C++ languages.&nbsp; Because of the rich
+capabilities of CLR-style managed objects, a full support for the
+traditional C++ class/object semantics is somewhat supplanted by a C-like
+language extended to express managed objects.&nbsp; In other words, you can get
+to the SMC language by adding to C, subtracting from C++, or by
+subtracting from both.&nbsp; This section contains a brief summary that
+characterizes the SMC language along these lines.&nbsp; Features marked with
+<b>**</b> in the following lists indicate that there are plans for future
+support of the feature.
+
+<h4>Subtract from Both C and C++</h4>
+<p>
+<ul>
+  <li>
+  No trigraph support.
+  </li>
+  <li>
+  No line splicing (i.e., no '\' at line ends).
+  </li>
+  <li>
+  Limited set of intrinsic types:
+  <table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="75%">
+  <tr>
+    <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Type</b>
+    </font></th>
+    <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Description</b>
+    </font></th>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>char</b>
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    signed 8-bit int.
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>byte</b>
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    unsigned 8-bit.
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>wchar</b>
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    Unicode 'wide' character.
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>short, ushort</b>
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    16-bit int/unsigned.
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>int, uint</b>
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    32-bit int/unsigned.
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>longint, ulongint</b>
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    64-bit long/unsigned.
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>__int&lt;size&gt;, __uint&lt;size&gt;</b>
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    Signed/Unsigned where &lt;size&gt; can be 8, 16, 32, or 64.
+    </font></td>
+  </tr>
+  </table>
+  </li>
+  <li>
+  <b>**</b> <b>struct, enum, union</b> tags are not supported in type specs.
+  </li>
+  <li>
+  <b>extern</b> declarations are not supported inside functions.
+  </li>
+  <li>
+  <b>const</b> should only be used for compile-time constants.
+  </li>
+  <li>
+  <b>**</b> In <b>typedef</b> declarations, only one type name is allowed
+  and if the type includes a <b>struct, union, enum</b> then the tag and
+  <b>typedef</b> names must match.
+  </li>
+  <li>
+  <b>#include</b> preprocessor directives are ignored.
+  </li>
+  <li>
+  <b>**</b> <b>#define</b> preprocessor directive is limited to macros
+  with no arguments. Definition must be an integer constant or single
+  identifier.
+  </li>
+  <li>
+  <b>#define, #undef</b> preprocessor directives may not be applied to
+  identifiers already used.
+  </li>
+  <li>
+  <b>**</b> <b>__DATE__, __TIME__</b> are not supported.
+  </li>
+</ul>
+
+<h4>Subtract from C++</h4>
+<p>
+<ul>
+  <li>
+  No multiple inheritance of classes.
+  </li>
+  <li>
+  No virtual base classes.
+  </li>
+  <li>
+  No member pointers.
+  </li>
+  <li>
+  No support for destructors on classes.
+  </li>
+  <li>
+  Variables may not be initialized using the <i>type varname(init-args);</i>
+  syntax. Use the <i>type varname = init-val;</i> or <i>type varname = new
+  type(init-args);</i> syntax instead.
+  </li>
+  <li>
+  <b>**</b> The <i>extern &quot;language-string&quot;</i> syntax for specifying
+  linkage is not supported.
+  </li>
+  <li>
+  <b>**</b> Some operators can not be overloaded (e.g., [], (), -&gt;).
+  </li>
+  <li>
+  <b>**</b> No friends.
+  </li>
+  <li>
+  <b>**</b> No <i>using base::memfn;</i>.
+  </li>
+  <li>
+  <b>**</b> There are restrictions on how/where declarations can be
+  nested: no type/function declarations are allowed inside function
+  bodies, etc.
+  </li>
+  <li>
+  <b>**</b> Members may not be initialized using the
+  <i>ctor() : member(init-args)</i> syntax.
+  </li>
+  <li>
+  <b>**</b> The functional-style cast syntax <i>type(expr)</i> is only
+  partially supported.
+  </li>
+</ul>
+
+<h4>Add to C</h4>
+<p>
+<ul>
+  <li>
+  Delegates are <u>not</u> supported.
+  </li>
+  <li>
+  The global <b>main</b> function takes a pre-defined array of
+  managed arguments: (String managed [] args).
+  </li>
+  <li>
+  Character string literals auto-convert to ASCII/Unicode/managed.
+  A string literal can be prefixed with 'A' for ASCII, 'L' for
+  Unicode, and 'S' for managed.
+  </li>
+  <li>
+  Unmanaged imports from DLL's can be declared by wrapping the DLL and entry
+  point names in an extern directive.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre><font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+extern(&quot;msvcrt.dll:printf&quot;) int printf(const char *fmt, ...);
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+  Namespaces may be used to control scoping; they may contain any other
+  named entities, including types, variables, functions, and nested
+  namespaces.&nbsp; Both '::' and '.' may be used as a scope separator to refer
+  to nested names.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+namespace   outer_NS
+{
+  namespace   inner_NS
+  {
+    class       foo
+    {
+      // my fully qualified name is &quot;outer_NS::inner_NS::foo&quot;
+      // (or &quot;outer_NS.inner_NS.foo&quot; if you prefer).
+    }
+  }
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre>
+  <pre></pre>
+    </td></tr>
+  </table>
+  </li>
+  <li>
+Names in namespaces may be made visible without explicit qualification via
+a 'using' directive; this can either make a single name visible or all the
+names in a given namespace.&nbsp; An implicit 'using namespace System;' is added
+to every program.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+using   System.Collections.ArrayList;   // import a single class name
+using   System.IO.*;                    // make all names in a namespace directly visible
+using namespace System.Reflection;      // make all names in a namespace directly visible
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Classes and interfaces can be declared in addition to structs and unions;
+    any of these may contain single inheritance of implementation and multiple
+    inheritance of interfaces
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+interface   I1                      {};
+interface   I2                      {};
+//interface ID : I1, I2             {};   // not yet implemented
+
+class       B                       {};
+class       D : B implements I1,I2  {};
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Struct/class/array/reference types.
+    When -c is used, globally declared types default to unmanaged; otherwise,
+    types inherit management from parent (if nested) or default to managed.&nbsp;
+    Explicit management can be specified for class/struct/enum declarations,
+    in front of the [] array declarator, and on 'new' expressions.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+struct  def {};     // unmanaged if -c used, managed otherwise
+
+managed
+class   mc  {};     // managed class
+
+managed
+namespace   MNS
+{
+    class   foo {}; // inherits 'managed' from enclosing namespace
+}
+
+unmanaged
+class   uc          // unmanaged class
+{
+    class   foo {}; // inherits 'unmanaged' from enclosing class
+}
+
+void    do_new()
+{
+    int   managed [] mia = new   managed int [10];
+//  int *            uia = new unmanaged int [10];  // not yet implemented
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Classes and member functions can be declared abstract (for methods this
+    also implies 'virtual'), methods that are declared in interfaces are
+    virtual + abstract automatically.&nbsp; A class doesn't have to be declared
+    as abstract even if it doesn't implement all abstract methods that it
+    inherits from its base or gets from its interfaces, but this is flagged
+    with a warning.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+interface   intf1
+{
+    void    f1();
+    void    f2();
+};
+
+class   ab1 implements intf1    // class is not abstract
+{
+    void    f1(){}
+    void    f2(){}
+}
+
+class   ab2 implements intf1    // class is implicitly abstract, warning issued
+{
+    void    f1(){}
+}
+
+abstract
+class   ab3 implements intf1    // no warning issued
+{
+    void    f1(){}
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+  Each member of a class/struct/union has an 'access level' which controls
+  who is permitted to access it.&nbsp; By default, members may be accessed by
+  any code within the same assembly.&nbsp; The default access level of a member
+  can be changed in two ways - either by prefixing the member with an
+  access prefix, or by changing the default access in effect by including
+  an access specifier followed by a colon.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+struct  acc_str
+{
+    int     x;                  // accessible within assembly
+
+    public
+    int     y;                  // accessible to everyone
+
+private:                        // change default for subsequent members
+
+    int     z1;                 // accessible only to this class
+    int     z2;                 // ditto
+
+    protected
+    int     q;                  // protected member accessible to derived classes
+};
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Classes may have properties, both simple and 'indexed' (though the latter
+    may be removed at a future point).&nbsp; Each property may have a 'get' and/or
+    'set' accessor method definition (at least one is required, though).
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+class   props
+{
+    property
+    int     prop1
+    {
+        get { return prop1+1; }
+        set { prop1 = value;  }
+    }
+
+    property
+    String  prop2(int x, String s)
+    {
+        get { return &quot;prop2.get called(&quot; %% x %% s %% &quot;)&quot;; }
+    }
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Classes/structs may have constructors which are special methods that
+    create new instances of the given class/struct type.&nbsp; In fact, if the
+    user doesn't supply one of these the compiler supplied a default one
+    that zero-initializes the instance.&nbsp; There is no support for destructors; finalizers will be supported as
+    the CLR adds support for them.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+class   ctc
+{
+    public  ctc()   // name must match the class name, no return type allowed
+    {
+    }
+
+    private ctc(int x)
+    {
+    }
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Structs (value types in CLR runtime parlance) may contain
+    overloaded operator methods.&nbsp; Limited operator overloading is supported
+    for classes, but future status of this is uncertain. The following
+    operators may be overloaded:
+  <table BORDER="0" CELLPADDING="5" CELLSPACING="2" WIDTH="75%">
+  <tr>
+    <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Operator Kind</b>
+    </font></th>
+    <th BGCOLOR="#A6CAF0" ALIGN="LEFT"> <font FACE="Arial" SIZE="2"><b>Operators</b>
+    </font></th>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    Binary operators:
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>+, -, *, /, %, |, &amp;, ^, &lt;&lt;, &gt;&gt;, %%</b>
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    Unary operators:
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>+, -, !, ~, ++, --</b>
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    Assignment operators:
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    <b>=, +=, -=, *=, /=, %=, |=, &amp;=, ^=, &lt;&lt;=, &gt;&gt;=, =%%</b>
+    </font></td>
+  </tr>
+  <tr>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    Conversion operators:
+    </font></td>
+    <td BGCOLOR="#EEEEEE" VALIGN="TOP"><font FACE="Arial" SIZE="2">
+    implicit, explicit
+    </font></td>
+  </tr>
+</table>
+  Here is some example code showing operator overloading for a complex type.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+struct  complex
+{
+    double  re, im;
+
+    complex(double r, double i = 0.0)
+    {
+        re = r;
+        im = i;
+    }
+
+    static
+    complex operator+(complex c1, complex c2)
+    {
+        return  new complex(c1.re+c1.re, c1.im+c2.im);
+    }
+
+    static
+    complex operator implicit(double x)
+    {
+        return  new complex(x);
+    }
+
+    static
+    double  operator explicit(complex c)
+    {
+        return  c.re;
+    }
+
+    // etc.
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Class/struct/union types may be nested, but in -c mode the nested names
+    are moved to global (file) scope to be compatible with C.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+struct  outer_str
+{
+    struct  inner_str
+    {
+        // with -c I am in file scope, without -c I'm nested within outer_str
+    }
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Unions may be discriminated with a tag member (though the logic to check
+    the tag when accessing the various flavors of the union hasn't yet been
+    implemented).&nbsp; Anonymous unions may be declared and used (but only within
+    struct/class types, not at file scope or as local variables).
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+struct  str
+{
+    bool    big;
+
+    union(big)
+    {
+    case false:
+        char    x;
+    case true:
+        double  d;
+    };
+
+    union
+    {
+        int     i;
+        char    b[sizeof(int)];
+    };
+}
+
+void    muck_str(str *p)
+{
+    p-&gt;x++;           // this should (and will) check that p-&gt;big is false
+
+    /*
+      When referencing managed class types, a reference (pointer) is
+      implied and should not be explicitly specified (may change). For
+      unmanaged types the rules are basically the same as in C/C++.
+
+      The '.' and '-&gt;' operators may be used interchangeably to access
+      members of structs/classes/unions (though this may change).
+    */
+
+    p.i = 1 - p-&gt;i;
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    The %% operator may be used to concatenate managed strings.&nbsp; The operator
+    converts both operands to a System.String value (calling ToString and so
+    on, as appropriate).&nbsp; You can also use '+' to concatenate strings, but it
+    is not a recommended thing to do and may be withdrawn at any time.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+void    show_concat(int x)
+{
+    Console.WriteLine(&quot;The value of x is '&quot; %% x %% &quot;'&quot;);
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    String literals automatically assume the type 'char*' or 'wchar*' or
+    'System.String' depending on context.&nbsp; To get a specific flavor, use a
+    prefix - one of A, L or S.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+void    string_lits(const char *ansiStr, const wchar *wideStr, String mgdStr)
+{
+    string_lits( &quot;ansi&quot;,  &quot;wide&quot;,  &quot;managed&quot;);
+    string_lits(A&quot;ansi&quot;, L&quot;wide&quot;, S&quot;managed&quot;);
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    'assert' is a keyword / statement controlled by the -A/-AS command-line
+    option.&nbsp; When -A / -AS is enabled and an assert condition fails, the
+    compiler looks for a global function called __AssertAbort() and tries to
+    call it with a string representing the failed condition (NYI - for now
+    it's just a blank string) and the name of the file and the line# where
+    the assert tripped.&nbsp; The compiler will pass the strings to the function
+    as char* or String depending on how it's declared.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+extern(&quot;msvcrt.dll:exit&quot;) void exit(int);
+
+void    __AssertAbort(String why, String file, unsigned line)
+{
+    Console.WriteLine(&quot;hello, world&quot;);
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Enums have their member names injected into the enclosing scope only if
+    the -c option is used, otherwise qualification with the enum type is
+    required (this may change).
+  </li>
+  <li>
+    Functions / methods may be overloaded.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+void    f(int   ){}
+void    f(ushort){}
+
+void    f()
+{
+    f(123);         // calls f(int)
+//  f('a');         // ambiguous call
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Functions / methods may specify default argument values, which must be
+    compile-time constants (scalar or string).&nbsp; The defaults must all trail
+    any args without defaults, as usual.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+void    defarg(int x = 0, const char * s1 = &quot;hello&quot;, String s2 = &quot;world&quot;)
+{
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Function / method arguments may be declared as having modes 'in', 'out'
+    or 'inout'.&nbsp; Also, '&amp;' may be used to indicate a C++ like ref argument.&nbsp;
+    When passing an actual argument value to an out / inout / &amp; formal, use
+    an explicit '&amp;' operator to avoid a warning.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+void    arg_modes(in int x, out double d, void * &amp; ptrref)
+{
+    double  l1 = 0;
+    void *  l2 = null;
+
+    arg_modes(0,  l1,  l2); // warning for out and byref argument (To be fixed)
+    arg_modes(0, &amp;l1, &amp;l2);
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Declaration order is irrelevant (except for some corner cases), and so
+    a name may be used in source text even before its declaration is found
+    in textual order of the file.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+void    called_bwd()
+{
+    called_fwd();
+}
+
+void    called_fwd()
+{
+    called_bwd();
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Exception handling as defined by the CLR is supported;
+    this means that throw/try/catch (note that only managed types derived
+    from System.Exception may be thrown and caught), and try/except and
+    try/finally.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+extern  unsigned    _exception_code();
+
+void    catch_GPF()
+{
+    int *   nullptr = null;
+
+    try
+    {
+        try
+        {
+            *nullptr = 1;
+        }
+        except(_exception_code() == 0xC0000005 ? 1 : 0)
+        {
+            printf(&quot;GP fault occurred\n&quot;);
+        }
+    }
+    finally
+    {
+        // cleanup code
+    }
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    Managed classes may be declared as taking one or more type arguments,
+    such a class is called a 'parameterized class' or 'generic class'.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+managed class list&lt;class elem&gt;
+{
+}
+  <! ---End your cited code before this comment--- >
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    A formal type argument of a generic class may be constrained as either
+    having to be a derived class of a given base class, as implementing a
+    given set of interfaces, or as including specific methods.&nbsp; This is not
+    yet fully implemented.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+managed class gen&lt;class arg1 /* : basecls */,
+                  class arg2 /* implements intf */,
+                  class arg3 /* includes { bool operator&lt;(arg3,arg3); } */ &gt; { } <! End your cited code before this comment--->
+  </font></pre></td></tr>
+  </table>
+  </li>
+  <li>
+    If an EXE (as opposed to a DLL) is being built, a main() function must
+    be supplied as the entry point, this can be either a global or member
+    function taking an array of managed strings as a single argument.
+  <table BORDER="0" WIDTH="95%" ALIGN="CENTER" BGCOLOR="#EEEEEE">
+  <tr><td WIDTH="100%" ALIGN="LEFT" VALIGN="MIDDLE">
+  <pre> <font FACE="COURIER" SIZE="2">
+  <! ---Begin your cited code after this comment--- >
+int main(String managed [] args)
+{
+    Console.WriteLine(&quot;hello, world&quot;);
+
+    for (uint i = 0; i <args.getlength(); i++) Console.WriteLine(&quot;arg[&quot; %% i %% &quot;]="&quot; %% args[i] %% &quot;" &quot;); return 0; } <! End your cited code before this comment--->
+  </font></pre></td></tr>
+  </table>
+  </li>
+</ul>
+
+<p ALIGN="CENTER"><a HREF="#top" TARGET="_self">
+ Back to Top</a>
+
+</font>
+
+</body>
+
+</html>
