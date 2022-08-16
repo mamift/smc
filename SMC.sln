@@ -1,0 +1,33 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio 14
+VisualStudioVersion = 14.0.25420.1
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CORwrap", "CORwrap.vcxproj", "{17D00C87-D979-4A21-8F50-024B1814C0CF}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SMC", "SMC.vcxproj", "{1FCD19E8-3C89-493F-BEF5-BBAC95DAF0E0}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x86 = Debug|x86
+		Release|x86 = Release|x86
+		Template|x86 = Template|x86
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{17D00C87-D979-4A21-8F50-024B1814C0CF}.Debug|x86.ActiveCfg = Debug|Win32
+		{17D00C87-D979-4A21-8F50-024B1814C0CF}.Debug|x86.Build.0 = Debug|Win32
+		{17D00C87-D979-4A21-8F50-024B1814C0CF}.Release|x86.ActiveCfg = Release|Win32
+		{17D00C87-D979-4A21-8F50-024B1814C0CF}.Release|x86.Build.0 = Release|Win32
+		{17D00C87-D979-4A21-8F50-024B1814C0CF}.Template|x86.ActiveCfg = Release|Win32
+		{17D00C87-D979-4A21-8F50-024B1814C0CF}.Template|x86.Build.0 = Release|Win32
+		{1FCD19E8-3C89-493F-BEF5-BBAC95DAF0E0}.Debug|x86.ActiveCfg = Debug|Win32
+		{1FCD19E8-3C89-493F-BEF5-BBAC95DAF0E0}.Debug|x86.Build.0 = Debug|Win32
+		{1FCD19E8-3C89-493F-BEF5-BBAC95DAF0E0}.Release|x86.ActiveCfg = Release|Win32
+		{1FCD19E8-3C89-493F-BEF5-BBAC95DAF0E0}.Release|x86.Build.0 = Release|Win32
+		{1FCD19E8-3C89-493F-BEF5-BBAC95DAF0E0}.Template|x86.ActiveCfg = Template|Win32
+		{1FCD19E8-3C89-493F-BEF5-BBAC95DAF0E0}.Template|x86.Build.0 = Template|Win32
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
